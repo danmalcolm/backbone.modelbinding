@@ -105,18 +105,27 @@ describe("Model Attr Accessor", function() {
 
     // References the root model at the start of a chain of access expressions
     var RootAccessor = function() {
-      this.get = function(model) {
-        return model;
+      this.get = function(target) {
+        return target;
+      };
+      this.bindToChangeEvents = function(target, callback, context) {
+        // Root model can't change
       };
     };
 
     var AttrAccessor = function(parent, expression) {
-      this.get = function(model) {
-        var target = parent.get(model);
-        if (target instanceof Backbone.Model)
-          return target.get(expression.name);
+      this.get = function(target) {
+        var model = parent.get(target);
+        if (model instanceof Backbone.Model)
+          return model.get(expression.name);
         else
           throw new Error('The object referenced by expression "' + expression.text + '" is not a Backbone model and is not suitable for databinding');
+      };
+      this.bindToChangeEvents = function(target, callback, context) {
+        var model = parent.get(target);
+        if (model instanceof Backbone.Model) {
+          model.bind("change:" + expression.name,callback,context);
+        }
       };
     };
     AttrAccessor.expressionType = "attributeAccess";
@@ -135,22 +144,46 @@ describe("Model Attr Accessor", function() {
     };
     CollectionItemAccessor.expressionType = "collectionItemAccess";
 
-    var accessors = [AttrAccessor, CollectionItemAccessor];
+    var accessorTypes = [AttrAccessor, CollectionItemAccessor];
 
     var buildAccessor = function(path) {
       var expressions = parse(path);
       var accessor = _.reduce(expressions, function(parent, expression) {
-        var accessor = _.detect(accessors, function(a) { return a.expressionType === expression.type; });
-        return new accessor(parent, expression);
+        var accessorType = _.detect(accessorTypes, function(a) { return a.expressionType === expression.type; });
+        return new accessorType(parent, expression);
       }, new RootAccessor(), this);
 
       return accessor;
     };
 
+    var AttrBinder = function(target, path) {
+      this.target = target;
+      this.accessor = buildAccessor(path);
+      this.initialize();
+    };
+    _.extend(AttrBinder.prototype, Backbone.Events, {
+      initialize: function() {
+        this.rebind();
+      },
+      change: function() {
+        this.rebind();
+        var value = this.accessor.get(target);
+        this.trigger("change", value);
+      },
+      rebind: function() {
+        this.accessor.bindToChangeEvents(this.target, this.change, this);
+      }
+    });
+
     return {
-      create: function(path) {
+      accessorFor: function(path) {
         var accessor = buildAccessor(path);
         return accessor;
+      },
+      attrBinderFor: function(target, path) {
+        var accessor = this.accessorFor(path);
+        var binder = new AttrBinder(target, accessor);
+        return binder;
       }
     };
   })();
@@ -178,15 +211,15 @@ describe("Model Attr Accessor", function() {
     });
   });
 
-  describe("Creation", function() {
+  describe("Attr Accessor Creation", function() {
 
     var bad = function(path) {
       //ModelAttrAccessor.create(path); // uncomment to see the exception
-      expect(function() { return ModelAttrAccessor.create(path); }).toThrow();
+      expect(function() { return ModelAttrAccessor.accessorFor(path); }).toThrow();
     };
 
     var good = function(path, target, expected) {
-      var accessor = ModelAttrAccessor.create(path);
+      var accessor = ModelAttrAccessor.accessorFor(path);
       var value = accessor.get(target);
       expect(value).toEqual(expected);
     };
@@ -252,6 +285,44 @@ describe("Model Attr Accessor", function() {
 
   describe("Value binding", function() {
 
+    describe("When binding to attr of nested model", function() {
+      var accessor;
+      var events = [];
+
+      beforeEach(function() {
+        accessor = ModelAttrAccessor.attrBinderFor(product, "manufacturer.name");
+        accessor.bind("change", function(event, value) {
+          events.push({ event: event, value: value });
+        });
+      });
+
+      it("should notify of changes to attr", function() {
+        product.get("manufacturer").set({ name: "New Name!" });
+        expect(events.length).toEqual(1);
+        expect(events[0].value).toEqual("New Name!");
+      });
+
+      it("should notify when parent nested model changes", function() {
+        product.set({ manufacturer: manufacturer2 });
+        expect(events.length).toEqual(1);
+        expect(events[0].value).toEqual(manufacturer2.get("name"));
+      });
+
+      it("should unbind from events on previous model when parent nested model changes", function() {
+        product.set({ manufacturer: manufacturer2 });
+        events = [];
+        manufacturer1.set({ name: "New Name!!" });
+        expect(events.length).toEqual(0);
+      });
+
+      it("should not notify when parent nested model changes if attr value unchanged", function() {
+        manufacturer2.set({ Name: manufacturer1.Name });
+        product.set({ manufacturer: manufacturer2 });
+        expect(events.length).toEqual(0);
+      });
+
+
+    });
 
   });
 
