@@ -3,8 +3,6 @@ describe("Model Attr Accessor", function() {
   var ModelAttrAccessor = (function() {
 
     var parse = function() {
-      var text, index, current;
-
       var error = function(description) {
         var message = "Unexpected syntax at position " + index + " in model path '" + text + "': " + description;
         throw {
@@ -14,18 +12,24 @@ describe("Model Attr Accessor", function() {
           text: text
         };
       },
-        next = function(expected) {
-          if (expected && expected != current) {
-            error("Expected '" + expected + "' instead of '" + current + "'");
+        expressionChain = function() {
+          var result = [], first = true;
+          white();
+          while (current) {
+            result.push(expression(first));
+            if (white() && current) { // whitespace gobbled but more left, oh no!
+              error("Unexpected whitespace in middle of path");
+            }
+            first = false;
           }
-          var previous = text.charAt(index);
-          index += 1;
-          current = text.charAt(index);
-          return previous;
+          return result;
         },
-        white = function() {
-          while (current && current <= ' ') {
-            next();
+        expression = function(first) {
+          switch (current) {
+            case "[":
+              return collectionItemAccess(first);
+            default:
+              return attributeAccess(first);
           }
         },
         collectionItemAccess = function() {
@@ -49,9 +53,9 @@ describe("Model Attr Accessor", function() {
           number = +string;
           return number;
         },
-        attributeAccess = function() {
+        attributeAccess = function(first) {
           var text = "", attrName;
-          if (index > 0) {
+          if (!first) {
             text = next(".");
           }
           attrName = name();
@@ -69,29 +73,29 @@ describe("Model Attr Accessor", function() {
           }
           return string;
         },
-        expression = function() {
-          switch (current) {
-            case "[":
-              return collectionItemAccess();
-            default:
-              return attributeAccess();
+        next = function(expected) {
+          if (expected && expected != current) {
+            error("Expected '" + expected + "' instead of '" + current + "'");
           }
+          var previous = text.charAt(index);
+          index += 1;
+          current = text.charAt(index);
+          return previous;
         },
-        expressions = function() {
-          var result = [];
-          white();
-          while (current) {
-            result.push(expression());
+        white = function() {
+          var space = "";
+          while (current && current <= ' ') {
+            space += next();
           }
-          white();
-          return result;
+          return space;
         };
+      var text, index, current;
       return function(path) {
         var result;
         text = path;
         index = 0;
         current = (text.length > 0) ? text[index] : "";
-        result = expressions();
+        result = expressionChain();
         if (current) {
           error("Unrecognised syntax");
         }
@@ -144,39 +148,40 @@ describe("Model Attr Accessor", function() {
     };
 
     return {
-      create: function(path){
+      create: function(path) {
         var accessor = buildAccessor(path);
         return accessor;
       }
     };
   })();
 
+  var Product = Backbone.Model.extend({});
+  var Manufacturer = Backbone.Model.extend({});
+  var Review = Backbone.Model.extend({});
+  var ReviewCollection = Backbone.Collection.extend({
+    model: Review
+  });
+
+  var product, manufacturer1, manufacturer2, review1, review2, review3;
+
+  beforeEach(function() {
+    manufacturer1 = new Manufacturer({ code: "M1", name: "Manufacturer 1" });
+    manufacturer2 = new Manufacturer({ code: "M2", name: "Manufacturer 2" });
+    review1 = new Review({ title: "Review 1" });
+    review2 = new Review({ title: "Review 2" });
+    review3 = new Review({ title: "Review 3" });
+    product = new Product({
+      code: "P1",
+      name: "Product 1",
+      manufacturer: manufacturer1,
+      reviews: new ReviewCollection([review1, review2, review3])
+    });
+  });
+
   describe("Creation", function() {
 
-    var Product = Backbone.Model.extend({});
-    var Manufacturer = Backbone.Model.extend({});
-    var Review = Backbone.Model.extend({});
-    var ReviewCollection = Backbone.Collection.extend({
-      model: Review
-    });
-
-    var product, manufacturer1, manufacturer2, review1, review2, review3;
-
-    beforeEach(function() {
-      manufacturer1 = new Manufacturer({ code: "M1", name: "Manufacturer 1" });
-      manufacturer2 = new Manufacturer({ code: "M2", name: "Manufacturer 2" });
-      review1 = new Review({ title: "Review 1" });
-      review2 = new Review({ title: "Review 2" });
-      review3 = new Review({ title: "Review 3" });
-      product = new Product({
-        code: "P1",
-        name: "Product 1",
-        manufacturer: manufacturer1,
-        reviews: new ReviewCollection([review1, review2, review3])
-      });
-    });
-
     var bad = function(path) {
+      //ModelAttrAccessor.create(path); // uncomment to see the exception
       expect(function() { return ModelAttrAccessor.create(path); }).toThrow();
     };
 
@@ -186,8 +191,12 @@ describe("Model Attr Accessor", function() {
       expect(value).toEqual(expected);
     };
 
-    it("should throw with invalid attr name", function() {
+    it("should throw with illegal attr name", function() {
       bad("9asdf");
+    });
+
+    it("should throw with whitespace in middle of path", function() {
+      bad("reviews name");
     });
 
     it("should throw with letters in collection index", function() {
@@ -214,15 +223,23 @@ describe("Model Attr Accessor", function() {
       good("name", product, "Product 1");
     });
 
+    it("should access attr of target model with whitespace at start", function() {
+      good("  name", product, "Product 1");
+    });
+
+    it("should access attr of target model with whitespace at end", function() {
+      good("name  ", product, "Product 1");
+    });
+
     it("should access attr of nested model", function() {
       good("manufacturer.name", product, "Manufacturer 1");
     });
 
-    it("should access attr of model in specified position in nested collection", function() {
+    it("should access attr of model in nested collection", function() {
       good("reviews[1].title", product, "Review 2");
     });
 
-    it("should access attr of model in specified position including whitespace in nested collection", function() {
+    it("should access attr of model in nested collection with whitespace around position", function() {
       good("reviews[ 1 ].title", product, "Review 2");
     });
 
@@ -235,7 +252,7 @@ describe("Model Attr Accessor", function() {
 
   describe("Value binding", function() {
 
-   
+
   });
 
 });
