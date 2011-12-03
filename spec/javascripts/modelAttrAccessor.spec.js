@@ -44,7 +44,7 @@ describe("Model Attr Accessor", function() {
             next();
           }
           if (!string) {
-            error("Expected integer");
+            error("Expected a positive number");
           }
           number = +string;
           return number;
@@ -143,14 +143,12 @@ describe("Model Attr Accessor", function() {
       return accessor;
     };
 
-    var ModelAttrAccessor = function(path) {
-      this.accessor = buildAccessor(path);
-      this.getValue = function(model) {
-        return this.accessor.get(model);
-      };
+    return {
+      create: function(path){
+        var accessor = buildAccessor(path);
+        return accessor;
+      }
     };
-
-    return ModelAttrAccessor;
   })();
 
   describe("Creation", function() {
@@ -179,12 +177,12 @@ describe("Model Attr Accessor", function() {
     });
 
     var bad = function(path) {
-      expect(function() { return new ModelAttrAccessor(path); }).toThrow();
+      expect(function() { return ModelAttrAccessor.create(path); }).toThrow();
     };
 
     var good = function(path, target, expected) {
-      var accessor = new ModelAttrAccessor(path);
-      var value = accessor.getValue(target);
+      var accessor = ModelAttrAccessor.create(path);
+      var value = accessor.get(target);
       expect(value).toEqual(expected);
     };
 
@@ -237,80 +235,7 @@ describe("Model Attr Accessor", function() {
 
   describe("Value binding", function() {
 
-    var Product = Backbone.Model.extend({});
-    var Manufacturer = Backbone.Model.extend({});
-    var Review = Backbone.Model.extend({});
-
-    var product, manufacturer1, manufacturer2, review1, review2, review3;
-
-    beforeEach(function() {
-      manufacturer1 = new Manufacturer({ code: "M1", name: "Manufacturer 1" });
-      manufacturer2 = new Manufacturer({ code: "M2", name: "Manufacturer 2" });
-      review1 = new Review({ name: "Review 1" });
-      review2 = new Review({ name: "Review 2" });
-      review3 = new Review({ name: "Review 3" });
-      product = new Product({ code: "P1", name: "Product 1", manufacturer: manufacturer1, reviews: [review1, review2, review3] });
-    });
-
-    /*
-    test("When accessing attr of model in array", function() {
-    var accessor = new ModelGraphPath("reviews[0].name");
-    var value = accessor.getValue(product);
-    equal(value, "Review 1", "Should retrieve attr from model in array");
-    });
-
-    test("When accessing attr of child model", function() {
-    var accessor = new ModelGraphPath("manufacturer.name");
-    var value = accessor.getValue(product);
-    equal(value, "Manufacturer 1", "Should retrieve attr value from model");
-    });
-    */
-
-    describe("when accessing attr of root model", function() {
-      beforeEach(function() {
-        this.accessor = new ModelAttrAccessor("name");
-      });
-
-      it("should get value of attr", function() {
-        var value = this.accessor.getValue(product);
-        expect(value).toEqual("Product 1");
-      });
-
-      it("should get updated value of attr", function() {
-        product.set({ name: "New Name" });
-        var value = this.accessor.getValue(product);
-        expect(value).toEqual("New Name");
-      });
-    });
-
-    describe("when accessing attr of nested model", function() {
-      beforeEach(function() {
-        this.accessor = new ModelAttrAccessor("manufacturer.name");
-      });
-
-      it("should get value", function() {
-        var value = this.accessor.getValue(product);
-        expect(value).toEqual("Manufacturer 1");
-      });
-
-      it("should get value of new nested model when set", function() {
-        product.set({ manufacturer: manufacturer2 });
-        var value = this.accessor.getValue(product);
-        expect(value).toEqual("Manufacturer 2");
-      });
-    });
-
-    describe("when accessing attr of model in nested array", function() {
-      beforeEach(function() {
-        this.accessor = new ModelAttrAccessor("reviews[1].name");
-      });
-
-      it("should get value", function() {
-        var value = this.accessor.getValue(product);
-        expect(value).toEqual("Review 2");
-      });
-    });
-
+   
   });
 
 });
