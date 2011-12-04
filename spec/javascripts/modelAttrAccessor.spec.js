@@ -103,6 +103,20 @@ describe("Model Attr Accessor", function () {
       };
     } ();
 
+    // ----------------------------
+    // Accessors - Responsible for getting / setting values specified by a path from the target object (Backbone model or collection). 
+    // 
+    // Each accessor uses its parent to get the previous value in the chain, before retrieving its specified value
+    // For example, building an accessor for path "manufacturer.name" would result in the following hierarchy
+    // RootAccessor - retrieves the root model
+    // > AttrAccessor - retrieves the "manufacturer" attr of the root model
+    //   > AttrAccessor - retrieves the "name" attr of the Model referenced by previous "manufacturer" expression
+    //
+    // Accessors do not hold a reference to a specific target but used by AttrBinder (below) for:
+    // 1. accessing attr values
+    // 2. binding events to models and collections along the chain
+    // ----------------------------
+
     // References the root model at the start of a chain of access expressions
     var RootAccessor = function () {
       this.get = function (target) {
@@ -113,6 +127,7 @@ describe("Model Attr Accessor", function () {
       };
     };
 
+    // Accesses an attribute of a Backbone.Model instance
     var AttrAccessor = function (parent, expression) {
       this.get = function (target) {
         var model = parent.get(target);
@@ -139,6 +154,7 @@ describe("Model Attr Accessor", function () {
     };
     AttrAccessor.expressionType = "attributeAccess";
 
+    // Access model within a Backbone.Collection
     var CollectionItemAccessor = function (parent, expression) {
       this.get = function (model) {
         var collection = parent.get(model);
@@ -167,7 +183,8 @@ describe("Model Attr Accessor", function () {
     };
     CollectionItemAccessor.expressionType = "collectionItemAccess";
 
-    // Records events that have been bound to a target (model or collection) with an AttrBinder's change callback function
+    // Records events that have been bound to a target model or collection with an AttrBinder's change callback function
+    // to allow them to be unbound later on
     var TargetEventBinding = function (target, events) {
       this.unbindFromTarget = function (callback) {
         _.each(events, function (event) {
@@ -188,17 +205,25 @@ describe("Model Attr Accessor", function () {
       return accessor;
     };
 
+    // ----------------------------
+    // AttrBinder - Responsible for mediating between a DOM element and model attribute specified by a path.
+    // Listens out for changes to objects
+    // 
+    // ----------------------------
     var AttrBinder = function (target, accessor) {
       this.target = target;
       this.accessor = accessor;
-      this.currentValue = this.accessor.get(this.target);
+      this.currentValue = this.getValue(this.target);
       this.currentBindings = [];
       this.bindToTargets();
     };
     _.extend(AttrBinder.prototype, Backbone.Events, {
       change: function () {
         this.triggerChange();
-        this.bindToTargets(); // Any target along chain could have changed
+        // As any target along chain could have changed, we need to rebind to each.
+        // (certain types of change don't require rebinding but simpler just to rebind)
+        this.resetExistingBindings();
+        this.bindToTargets(); 
       },
       triggerChange: function () {
         var value = this.getValue();
@@ -208,8 +233,10 @@ describe("Model Attr Accessor", function () {
         this.currentValue = value;
       },
       bindToTargets: function () {
-        _.each(this.currentBindings, function (b) { b.unbindFromTarget(); });
         this.currentBindings = this.accessor.bindToTarget(this.target, this.change, this);
+      },
+      resetExistingBindings: function () {
+        _.each(this.currentBindings, function (b) { b.unbindFromTarget(); });
       },
       getValue: function () {
         return this.accessor.get(this.target);
@@ -340,7 +367,7 @@ describe("Model Attr Accessor", function () {
           this.message = function () {
             return "Expected a sequence of change events with values " + JSON.stringify(expectedValues) + " but actual values were " + JSON.stringify(actualValues);
           };
-          return _.isEqual(actualValues,expectedValues);
+          return _.isEqual(actualValues, expectedValues);
         },
         toContainNoEvents: function () {
           var events = this.actual;
@@ -389,7 +416,7 @@ describe("Model Attr Accessor", function () {
         expect(attrBinderEvents).toContainEventsWithValues([undefined]);
       });
 
-      
+
       it("should notify when nested model set to null, resulting in undefined value", function () {
         product.set({ manufacturer: null });
         expect(attrBinderEvents.length).toEqual(1);
