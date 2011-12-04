@@ -3,3 +3,5 @@
 Gemfile.lock
 *.sln
 *.suo
+/_ReSharper.backbone.modelbinding
+*.user
