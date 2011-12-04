@@ -116,6 +116,10 @@ describe("Model Attr Accessor", function () {
     var AttrAccessor = function (parent, expression) {
       this.get = function (target) {
         var model = parent.get(target);
+        if (!model) {
+          // if model not available, then the attr is undefined
+          return undefined;
+        }
         if (model instanceof Backbone.Model)
           return model.get(expression.name);
         else
@@ -204,7 +208,7 @@ describe("Model Attr Accessor", function () {
         this.currentValue = value;
       },
       bindToTargets: function () {
-        _.each(this.currentBindings,function(b) { b.unbindFromTarget(); });
+        _.each(this.currentBindings, function (b) { b.unbindFromTarget(); });
         this.currentBindings = this.accessor.bindToTarget(this.target, this.change, this);
       }
     });
@@ -346,10 +350,16 @@ describe("Model Attr Accessor", function () {
         expect(events[0].value).toEqual("New Name!");
       });
 
-      it("should notify of null value if nested model removed", function () {
-        product.get("manufacturer").set({ name: "New Name!" });
+      it("should notify when nested model unset, resulting in undefined value", function () {
+        product.unset("manufacturer");
         expect(events.length).toEqual(1);
-        expect(events[0].value).toEqual("New Name!");
+        expect(events[0].value).toBeUndefined();
+      });
+
+      it("should notify when nested model set to null, resulting in undefined value", function () {
+        product.set({ manufacturer: null });
+        expect(events.length).toEqual(1);
+        expect(events[0].value).toBeUndefined();
       });
 
       it("should notify when parent nested model changes", function () {
@@ -384,7 +394,7 @@ describe("Model Attr Accessor", function () {
 
       beforeEach(function () {
         createAccessor(product, "reviews[1].title");
-        collection = product.get("reviews"); 
+        collection = product.get("reviews");
       });
 
       it("should notify of changes to attr", function () {
