@@ -298,27 +298,27 @@ describe("Model Attr Accessor", function () {
       good("name", product, "Product 1");
     });
 
-    it("should access attr of target model with whitespace at start", function () {
+    it("should identify attr of target model when whitespace at start", function () {
       good("  name", product, "Product 1");
     });
 
-    it("should access attr of target model with whitespace at end", function () {
+    it("should identify attr of target model when whitespace at end", function () {
       good("name  ", product, "Product 1");
     });
 
-    it("should access attr of nested model", function () {
+    it("should identify attr of nested model", function () {
       good("manufacturer.name", product, "Manufacturer 1");
     });
 
-    it("should access attr of model in nested collection", function () {
+    it("should identify attr of model in nested collection", function () {
       good("reviews[1].title", product, "Review 2");
     });
 
-    it("should access attr of model in nested collection with whitespace around position", function () {
+    it("should identify attr of model in nested collection when whitespace around position", function () {
       good("reviews[ 1 ].title", product, "Review 2");
     });
 
-    it("should access attr of model in target collection", function () {
+    it("should identify attr of model in target collection", function () {
       var collection = product.get("reviews");
       good("[1].title", collection, "Review 2");
     });
@@ -328,18 +328,49 @@ describe("Model Attr Accessor", function () {
   describe("Value binding", function () {
 
     var attrBinder;
-    var events = [];
+    var attrBinderEvents = [];
 
     beforeEach(function () {
-      events = [];
+      attrBinderEvents = [];
+      this.addMatchers({
+
+        toContainEventsWithValues: function (expectedValues) {
+          var events = this.actual;
+          var actualValues = _.pluck(events, "value");
+          this.message = function () {
+            return "Expected a sequence of change events with values " + JSON.stringify(expectedValues) + " but actual values were " + JSON.stringify(actualValues);
+          };
+          return _.isEqual(actualValues,expectedValues);
+        },
+        toContainNoEvents: function () {
+          var events = this.actual;
+          var actualValues = _.pluck(events, "value");
+          this.message = function () {
+            return "Expected no values changes to be recorded, but actual values were " + JSON.stringify(actualValues);
+          };
+          return actualValues.length == 0;
+        }
+      });
     });
 
     var createAccessor = function (target, path) {
       attrBinder = ModelAttrAccessor.attrBinderFor(target, path);
       attrBinder.bind("change", function (event) {
-        events.push(event);
+        attrBinderEvents.push(event);
       });
     };
+
+    describe("When bound to attr of target model", function () {
+
+      beforeEach(function () {
+        createAccessor(product, "name");
+      });
+
+      it("should notify of changes to attr", function () {
+        product.set({ name: "New Name!" });
+        expect(attrBinderEvents).toContainEventsWithValues(["New Name!"]);
+      });
+    });
 
     describe("When bound to attr of nested model", function () {
 
@@ -349,20 +380,20 @@ describe("Model Attr Accessor", function () {
 
       it("should notify of changes to attr", function () {
         product.get("manufacturer").set({ name: "New Name!" });
-        expect(events.length).toEqual(1);
-        expect(events[0].value).toEqual("New Name!");
+        expect(attrBinderEvents).toContainEventsWithValues(["New Name!"]);
       });
 
       it("should notify when nested model unset, resulting in undefined value", function () {
         product.unset("manufacturer");
-        expect(events.length).toEqual(1);
-        expect(events[0].value).toBeUndefined();
+        expect(attrBinderEvents.length).toEqual(1);
+        expect(attrBinderEvents).toContainEventsWithValues([undefined]);
       });
 
+      
       it("should notify when nested model set to null, resulting in undefined value", function () {
         product.set({ manufacturer: null });
-        expect(events.length).toEqual(1);
-        expect(events[0].value).toBeUndefined();
+        expect(attrBinderEvents.length).toEqual(1);
+        expect(attrBinderEvents).toContainEventsWithValues([undefined]);
       });
 
       it("should retrieve undefined value when nested model is null", function () {
@@ -372,15 +403,15 @@ describe("Model Attr Accessor", function () {
 
       it("should notify when parent nested model changes", function () {
         product.set({ manufacturer: manufacturer2 });
-        expect(events.length).toEqual(1);
-        expect(events[0].value).toEqual(manufacturer2.get("name"));
+        expect(attrBinderEvents.length).toEqual(1);
+        expect(attrBinderEvents[0].value).toEqual(manufacturer2.get("name"));
       });
 
       it("should not notify about changes to original nested model after it has been replaced", function () {
         product.set({ manufacturer: manufacturer2 });
-        events = [];
+        attrBinderEvents = [];
         manufacturer1.set({ name: "New Name!!" });
-        expect(events.length).toEqual(0);
+        expect(attrBinderEvents).toContainNoEvents();
       });
 
       it("should unbind from nested model when it has been replaced", function () {
@@ -388,10 +419,10 @@ describe("Model Attr Accessor", function () {
         expect(manufacturer1._callbacks["change:name"]).toEqual([]);
       });
 
-      it("should not trigger change if when parent nested model changes but has same attr value", function () {
+      it("should not trigger change if nested model changed to model with equal attr value", function () {
         manufacturer2.set({ name: manufacturer1.get("name") });
         product.set({ manufacturer: manufacturer2 });
-        expect(events.length).toEqual(0);
+        expect(attrBinderEvents).toContainNoEvents();
       });
 
 
@@ -407,23 +438,20 @@ describe("Model Attr Accessor", function () {
 
       it("should notify of changes to attr", function () {
         collection.at(1).set({ title: "New Title!" });
-        expect(events.length).toEqual(1);
-        expect(events[0].value).toEqual("New Title!");
+        expect(attrBinderEvents).toContainEventsWithValues(["New Title!"]);
       });
 
       it("should notify when item removed, resulting in different model at specified position", function () {
         collection.remove(collection.at(1));
-        expect(events.length).toEqual(1);
-        expect(events[0].value).toEqual(review3.get("title"));
+        expect(attrBinderEvents).toContainEventsWithValues([review3.get("title")]);
       });
 
       it("should notify when item added, resulting in different model at specified position", function () {
         var date = new Date(review2.get("date"));
         date.setDate(date.getDate() - 1);
-        var review = new Review({ title: "New Review!", date: date });
-        collection.add(review);
-        expect(events.length).toEqual(1);
-        expect(events[0].value).toEqual(review.get("title"));
+        var newReview = new Review({ title: "New Review!", date: date });
+        collection.add(newReview); // Collection sorted by date, so this will be at index 1
+        expect(attrBinderEvents).toContainEventsWithValues([newReview.get("title")]);
       });
 
     });
