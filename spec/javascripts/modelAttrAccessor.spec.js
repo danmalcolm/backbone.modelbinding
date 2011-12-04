@@ -201,7 +201,7 @@ describe("Model Attr Accessor", function () {
         this.bindToTargets(); // Any target along chain could have changed
       },
       triggerChange: function () {
-        var value = this.accessor.get(this.target);
+        var value = this.getValue();
         if (value !== this.currentValue) {
           this.trigger("change", { value: value });
         }
@@ -210,6 +210,9 @@ describe("Model Attr Accessor", function () {
       bindToTargets: function () {
         _.each(this.currentBindings, function (b) { b.unbindFromTarget(); });
         this.currentBindings = this.accessor.bindToTarget(this.target, this.change, this);
+      },
+      getValue: function () {
+        return this.accessor.get(this.target);
       }
     });
 
@@ -324,7 +327,7 @@ describe("Model Attr Accessor", function () {
 
   describe("Value binding", function () {
 
-    var accessor;
+    var attrBinder;
     var events = [];
 
     beforeEach(function () {
@@ -332,8 +335,8 @@ describe("Model Attr Accessor", function () {
     });
 
     var createAccessor = function (target, path) {
-      accessor = ModelAttrAccessor.attrBinderFor(target, path);
-      accessor.bind("change", function (event) {
+      attrBinder = ModelAttrAccessor.attrBinderFor(target, path);
+      attrBinder.bind("change", function (event) {
         events.push(event);
       });
     };
@@ -360,6 +363,11 @@ describe("Model Attr Accessor", function () {
         product.set({ manufacturer: null });
         expect(events.length).toEqual(1);
         expect(events[0].value).toBeUndefined();
+      });
+
+      it("should retrieve undefined value when nested model is null", function () {
+        product.set({ manufacturer: null });
+        expect(attrBinder.getValue()).toBeUndefined();
       });
 
       it("should notify when parent nested model changes", function () {
