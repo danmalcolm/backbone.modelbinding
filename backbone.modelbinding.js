@@ -202,6 +202,9 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
             break;
           case "prop":
             if(model) {
+              if(_.isFunction(model[expression.name])) {
+                throw new Error("Property '" + expression.name + "' is a function and cannot be changed via model binding");
+              }
               model[expression.name] = value;
             }
         }
