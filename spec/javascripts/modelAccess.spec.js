@@ -12,8 +12,14 @@ describe("Model Access", function () {
   var product, manufacturer1, manufacturer2, review1, review2, review3;
 
   beforeEach(function () {
-    manufacturer1 = new Manufacturer({ code: "M1", name: "Manufacturer 1" });
-    manufacturer2 = new Manufacturer({ code: "M2", name: "Manufacturer 2" });
+    manufacturer1 = new Manufacturer({ code: "M1", name: "Manufacturer 1", 
+        address: { number: 1, street: "Larch Grove", CountryCode: "GB" },
+        phones: [ { type: "phone", number: "0181 123 567" }, { type: "fax", number: "0181 123 569"} ]
+    });
+    manufacturer2 = new Manufacturer({ code: "M2", name: "Manufacturer 2", 
+        address: { number: 8, street: "Leopards Parade", CountryCode: "GB" },
+        phones: [ { type: "phone", number: "0181 234 567" }, { type: "fax", number: "0181 234 569"} ]
+    });
     review1 = new Review({ title: "Review 1", date: new Date(2012, 1, 1) });
     review2 = new Review({ title: "Review 2", date: new Date(2012, 1, 10) });
     review3 = new Review({ title: "Review 3", date: new Date(2012, 1, 20) });
@@ -21,85 +27,207 @@ describe("Model Access", function () {
       code: "P1",
       name: "Product 1",
       manufacturer: manufacturer1,
-      reviews: new ReviewCollection([review1, review2, review3])
+      reviews: new ReviewCollection([review1, review2, review3]),
+      tags: [ "tag1", "tag2", "tag3" ]
     });
+    product.notAnAttr = "Not an attr";
   });
 
-  describe("Attr Accessor Creation", function () {
+  describe("Attr Access",function(){
 
-    var bad = function (path) {
-      //modelAccess.accessorFor(path); // uncomment to see the exception
-      expect(function () { return modelAccess.accessorFor(path); }).toThrow();
-    };
-
-    var good = function (path, target, expected) {
+    var get = function (path, target, expected) {
       var accessor = modelAccess.accessorFor(path);
       var value = accessor.get(target);
       expect(value).toEqual(expected);
     };
+    
+    var set = function (path, target, value) {
+      var accessor = modelAccess.accessorFor(path);
+      accessor.set(target, value);
+      expect(accessor.get(target)).toEqual(value);
+    };
+    
+    describe("Attr Access Creation", function () {
+    
+      var bad = function (path) {
+        //modelAccess.accessorFor(path); // uncomment to see the exception
+        expect(function () { return modelAccess.accessorFor(path); }).toThrow();
+      };
 
-    it("should throw with illegal attr name", function () {
-      bad("9asdf");
+      it("should throw with illegal attr name", function () {
+        bad("9asdf");
+      });
+
+      it("should throw with whitespace in middle of path", function () {
+        bad("reviews name");
+      });
+
+      it("should throw with letters in collection index", function () {
+        bad("reviews[asdf]");
+      });
+
+      it("should throw with numbers followed by letters in collection index", function () {
+        bad("reviews[0ddf]");
+      });
+    
+      it("should throw with letters followed by numbers in collection index", function () {
+        bad("reviews[asd0]");
+      });
+
+      it("should throw with leading whitespace in collection index", function () {
+        bad("reviews[  0]");
+      });
+
+      it("should throw with trailing whitespace in collection index", function () {
+        bad("reviews[0  ]");
+      });
+
+      it("should throw with trailing dot", function () {
+        bad("manufacturer.");
+      });
+
+      it("should throw with leading dot", function () {
+        bad(".manufacturer");
+      });
+      
+      it("should reference attr of target model when whitespace at start", function () {
+        get("  name", product, "Product 1");
+      });
+
+      it("should reference attr of target model when whitespace at end", function () {
+        get("name  ", product, "Product 1");
+      });
+
+    });
+  
+    describe("Model Attrs and Properties", function () {
+    
+      it("should get attr of target model", function () {
+        get("name", product, "Product 1");
+      });
+       
+      it("should set attr of target model", function () {
+        set("name", product, "New Name!");
+      });
+      
+      it("should get non-attr property of target model", function () {
+        get("notAnAttr", product, "Not an attr");
+      });
+    
+      it("should set non-attr property of target model", function () {
+        set("notAnAttr", product, "New Value!");
+      });
+      
+      it("should get attr of nested model", function () {
+        get("manufacturer.name", product, "Manufacturer 1");
+      });
+      
+       it("should set attr of nested model", function () {
+        set("manufacturer.name", product, "New Name!");
+      });
+      
+      it("should get non-model attr of nested model", function () {
+        get("manufacturer.address", product, product.get("manufacturer").get("address"));
+      });
+      
+      it("should set non-model attr of nested model", function () {
+        set("manufacturer.address", product, { number: 99, street: "Sketchy Strasse", CountryCode: "DE" } );
+      });
+      
+      it("should get property of non-model attr of nested model", function () {
+        get("manufacturer.address.street", product, product.get("manufacturer").get("address").street);
+      });
+      
+      it("should set property of non-model attr of nested model", function () {
+        set("manufacturer.address.street", product, "New Street!" );
+      });
+      
+      it("should set new value as attr on target model when not defined as attr or property", function () {
+        set("newAttr", product, "999999");
+        expect(product.get("newAttr")).toEqual("999999");
+        expect(product.newAttr).toBeUndefined();
+      });
+      
+      it("should update property on target model when not defined as attr and property with name exists", function () {
+        product.newAttr = "123";
+        set("newAttr", product, "999999");
+        expect(product.newAttr).toEqual("999999");
+        expect(product.has("newAttr")).toBeFalsy();
+      });
     });
 
-    it("should throw with whitespace in middle of path", function () {
-      bad("reviews name");
-    });
+    describe("Arrays and Collections", function () {
+    
+      it("should get string in array attr of target model", function () {
+        get("tags[1]", product, "tag2");
+      });
+    
+      it("should set string in array attr of target model", function () {
+        set("tags[1]", product, "New Tag!");
+      });
 
-    it("should throw with letters in collection index", function () {
-      bad("reviews[asdf]");
-    });
+      it("should get length of array attr of target model", function () {
+        get("tags.length", product, 3);
+      });
+      
+//      it("should throw if attempting to set length of array",function(){
+//        expect(function(){
+//          var accessor = modelAccess.accessorFor("tags.length");
+//          accessor.set(product,1);
+//        }).toThrow();
+//      });
+      
+      it("should get attr of model in nested collection", function () {
+        get("reviews[1].title", product, "Review 2");
+      });
+      
+      it("should set attr of model in nested collection", function () {
+        set("reviews[1].title", product, "New Title!");
+      });
 
-    it("should throw with numbers followed by letters in collection index", function () {
-      bad("reviews[0ddf]");
+       it("should get length of nested collection", function () {
+        get("reviews.length", product, 3);
+      });
+      
+//      it("should throw if attempting to set length of collection",function(){
+//        expect(function(){
+//          var accessor = modelAccess.accessorFor("reviews.length");
+//          accessor.set(product,1);
+//        }).toThrow();
+//      });
+      
+      it("should throw if attempting to set model item in nested collection",function(){
+        expect(function(){
+          var accessor = modelAccess.accessorFor("reviews[1]");
+          accessor.set(product,review3);
+        }).toThrow();
+      });
+      
+      it("should get property of non-model object in nested array", function () {
+        get("manufacturer.phones[0].number", product, "0181 123 567");
+      });
+      
+      it("should set property of non-model object in nested array", function () {
+        set("manufacturer.phones[0].number", product, "999999");
+      });
+            
+      it("should replace non-model object in nested array", function () {
+        set("manufacturer.phones[0]", product, { type: "phone", number: "999999" });
+      });
+
+      it("should get attr of model in target collection", function () {
+        var collection = product.get("reviews");
+        get("[1].title", collection, "Review 2");
+      });
+      
+      it("should set attr of model in target collection", function () {
+        var collection = product.get("reviews");
+        set("[1].title", collection, "New Title!");
+      });
+      
     });
     
-    it("should throw with letters followed by numbers in collection index", function () {
-      bad("reviews[asd0]");
-    });
-
-    it("should throw with leading whitespace in collection index", function () {
-      bad("reviews[  0]");
-    });
-
-    it("should throw with trailing whitespace in collection index", function () {
-      bad("reviews[0  ]");
-    });
-
-    it("should throw with trailing dot", function () {
-      bad("manufacturer.");
-    });
-
-    it("should throw with leading dot", function () {
-      bad(".manufacturer");
-    });
-
-    it("should access attr of target model", function () {
-      good("name", product, "Product 1");
-    });
-
-    it("should identify attr of target model when whitespace at start", function () {
-      good("  name", product, "Product 1");
-    });
-
-    it("should identify attr of target model when whitespace at end", function () {
-      good("name  ", product, "Product 1");
-    });
-
-    it("should identify attr of nested model", function () {
-      good("manufacturer.name", product, "Manufacturer 1");
-    });
-
-    it("should identify attr of model in nested collection", function () {
-      good("reviews[1].title", product, "Review 2");
-    });
-
-    it("should identify attr of model in target collection", function () {
-      var collection = product.get("reviews");
-      good("[1].title", collection, "Review 2");
-    });
   });
-
 
   describe("Model Change Tracking", function () {
 

@@ -160,30 +160,52 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
     };
 
     // Accesses an attribute of a Backbone.Model instance
-    var AttrAccessor = function (parent, expression) {
+    var AttrAccessor = function (parent, expression){
       this.get = function (target) {
         var model = this.getModel(target);
-        return model ? model.get(expression.name) : undefined;
+        if(model instanceof Backbone.Model && model.has(expression.name)){
+          return model.get(expression.name);
+        }
+        else if (model && !_.isFunction(model[expression.name])) {
+          return model[expression.name];
+        }
+        else {
+          return undefined;
+        }
       };
-      this.has = function (target) {
+      this.has = function(target){
         var model = this.getModel(target);
-        return model.has(expression.name);
+        if(model instanceof Backbone.Model && model.has(expression.name)){
+          return true;
+        }
+        else {
+          return model && expression.name in model;
+        }
       };
       this.set = function (target, value) {
         var model = this.getModel(target);
-        if (model) {
-          var attrs = {};
-          attrs[expression.name] = value;
-          model.set(attrs);
+        var mode = "prop";
+        if(model instanceof Backbone.Model) {
+          var existsAsProperty = model && expression.name in model;
+          if(model.has(expression.name) || !existsAsProperty) {
+            // favour setting attribute on model if not currently attr or property
+            mode = "attr"; 
+          }
+        }
+        switch(mode) {
+          case "attr":
+            var attrs = {};
+            attrs[expression.name] = value;
+            model.set(attrs);
+            break;
+          case "prop":
+            if(model) {
+              model[expression.name] = value;
+            }
         }
       },
       this.getModel = function (target) {
         var model = parent.get(target);
-        if (!model) {
-          return model;
-        }
-        if (!model instanceof Backbone.Model)
-          throw new Error('The object referenced by expression "' + expression.text + '" is not a Backbone model and is not suitable for modelbinding');
         return model;
       };
       this.bindToTarget = function (target, callback, context) {
@@ -206,9 +228,8 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         var collection = parent.get(target);
         if (collection instanceof Backbone.Collection) {
           return collection.at(expression.index);
-        } else {
-          // could support arrays, but no events on add / remove
-          throw new Error("Unable to access collection item because the object is not a Backbone collection");
+        } else if(_.isArray(collection)) {
+          return collection[expression.index];
         }
       };
       this.has = function (target) {
@@ -216,7 +237,13 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         return collection.length > expression.index;
       },
       this.set = function (target, value) {
-        throw ("Setting a collection item is not supported by modelbinding. Elements in the view can only be bound to the attributes of collection items, not the collection items themselves");
+        var collection = parent.get(target);
+        if (collection instanceof Backbone.Collection) {
+          throw ("Setting an item in a Backbone collection is not supported by modelbinding. Elements in the view can be bound to attributes of models in the collection, but not directly to models");
+        }
+        else if (_.isArray(collection)) {
+          collection[expression.index] = value;
+        }
       };
       this.bindToTarget = function (target, callback, context) {
         var eventBindings = [];
