@@ -466,9 +466,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         if (!attribute_path) return;
 
         var changeTracker = modelAccess.changeTrackerFor(model, attribute_path);
-
         var modelChange = function (ev) { element.val(ev.value); };
-
         var elementChange = function (ev) {
           changeTracker.setValue(view.$(ev.target).val());
         };
@@ -503,29 +501,29 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
 
       view.$(selector).each(function (index) {
         var element = view.$(this);
-        var attribute_name = config.getBindingValue(element, 'select');
+        var attribute_path = config.getBindingValue(element, 'select');
+        if (!attribute_path) return;
 
-        var modelChange = function (changed_model, val) { element.val(val); };
-
-        var setModelValue = function (attr, val, text) {
-          var data = {};
-          data[attr] = val;
-          data[attr + "_text"] = text;
-          model.set(data);
-        };
-
+        var changeTracker = modelAccess.changeTrackerFor(model, attribute_path);
+        var textAttrAccessor = modelAccess.accessorFor(attribute_path + "_text");
+        var modelChange = function (ev) { element.val(ev.value); };
         var elementChange = function (ev) {
           var targetEl = view.$(ev.target);
           var value = targetEl.val();
           var text = targetEl.find(":selected").text();
-          setModelValue(attribute_name, value, text);
+          setModelValue(value, text);
         };
 
-        modelBinder.registerModelBinding(model, attribute_name, modelChange);
+        var setModelValue = function (val, text) {
+          changeTracker.setValue(val);
+          textAttrAccessor.set(model, text);
+        };
+
+        modelBinder.registerChangeTrackerBinding(changeTracker, modelChange);
         modelBinder.registerElementBinding(element, elementChange);
 
         // set the default value on the form, from the model
-        var attr_value = model.get(attribute_name);
+        var attr_value = changeTracker.getValue();
         if (typeof attr_value !== "undefined" && attr_value !== null) {
           element.val(attr_value);
         }
@@ -534,7 +532,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         if (element.val() != attr_value) {
           var value = element.val();
           var text = element.find(":selected").text();
-          setModelValue(attribute_name, value, text);
+          setModelValue(value, text);
         }
       });
     };
@@ -555,47 +553,47 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       view.$(selector).each(function (index) {
         var element = view.$(this);
 
-        var group_name = config.getBindingValue(element, 'radio');
-        if (!foundElements[group_name]) {
-          foundElements[group_name] = true;
+        var group_path = config.getBindingValue(element, 'radio');
+        if (!group_path) return;
+        if (!foundElements[group_path]) {
+          foundElements[group_path] = true;
           var bindingAttr = config.getBindingAttr('radio');
 
-          var modelChange = function (model, val) {
-            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_name + "][value=" + val + "]";
+          var changeTracker = modelAccess.changeTrackerFor(model, group_path);
+          var modelChange = function (ev) {
+            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_path + "][value=" + ev.value + "]";
             view.$(value_selector).attr("checked", "checked");
           };
-          modelBinder.registerModelBinding(model, group_name, modelChange);
+          modelBinder.registerChangeTrackerBinding(changeTracker, modelChange);
 
-          var setModelValue = function (attr, val) {
-            var data = {};
-            data[attr] = val;
-            model.set(data);
+          var setModelValue = function (val) {
+            changeTracker.setValue(val);
           };
 
           // bind the form changes to the model
           var elementChange = function (ev) {
             var element = view.$(ev.currentTarget);
             if (element.is(":checked")) {
-              setModelValue(group_name, element.val());
+              changeTracker.setValue(element.val());
             }
           };
 
-          var group_selector = "input[type=radio][" + bindingAttr + "=" + group_name + "]";
+          var group_selector = "input[type=radio][" + bindingAttr + "=" + group_path + "]";
           view.$(group_selector).each(function () {
             var groupEl = $(this);
             modelBinder.registerElementBinding(groupEl, elementChange);
           });
 
-          var attr_value = model.get(group_name);
+          var attr_value = changeTracker.getValue();
           if (typeof attr_value !== "undefined" && attr_value !== null) {
             // set the default value on the form, from the model
-            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_name + "][value=" + attr_value + "]";
+            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_path + "][value=" + attr_value + "]";
             view.$(value_selector).attr("checked", "checked");
           } else {
             // set the model to the currently selected radio button
-            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_name + "]:checked";
+            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_path + "]:checked";
             var value = view.$(value_selector).val();
-            setModelValue(group_name, value);
+            changeTracker.setValue(value);
           }
         }
       });
