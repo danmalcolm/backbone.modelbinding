@@ -186,9 +186,11 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         var model = this.getModel(target);
         var mode = "prop";
         if(model instanceof Backbone.Model) {
-          var existsAsProperty = model && expression.name in model;
+          var existsAsProperty = model 
+            && expression.name in model 
+            && !_.isFunction(model[expression.name]);
           if(model.has(expression.name) || !existsAsProperty) {
-            // favour setting attribute on model if not currently attr or property
+            // Set attribute on model if not currently attr or property
             mode = "attr"; 
           }
         }

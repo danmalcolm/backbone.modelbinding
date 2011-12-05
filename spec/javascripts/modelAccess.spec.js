@@ -154,6 +154,15 @@ describe("Model Access", function () {
         expect(product.newAttr).toEqual("999999");
         expect(product.has("newAttr")).toBeFalsy();
       });
+      
+      it("should set new attr on target model when property with name exists on object contains a function", function () {
+        var func = function(){};
+        product.newAttr = func;
+        set("newAttr", product, "999999");
+        expect(product.get("newAttr")).toEqual("999999");
+        expect(product.newAttr).toEqual(func);
+      });
+      
     });
 
     describe("Arrays and Collections", function () {
