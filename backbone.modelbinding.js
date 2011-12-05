@@ -153,6 +153,9 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       this.get = function (target) {
         return target;
       };
+      this.has = function (target) {
+        return !_.isNull(target) && !_.isUndefined(target);
+      },
       this.bindToTarget = function () {
         return [];
       };
@@ -163,6 +166,10 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       this.get = function (target) {
         var model = this.getModel(target);
         return model ? model.get(expression.name) : undefined;
+      };
+      this.has = function (target) {
+        var model = this.getModel(target);
+        return model.has(expression.name);
       };
       this.set = function (target, value) {
         var model = this.getModel(target);
@@ -197,8 +204,8 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
 
     // Access model within a Backbone.Collection by index
     var CollectionItemAccessor = function (parent, expression) {
-      this.get = function (model) {
-        var collection = parent.get(model);
+      this.get = function (target) {
+        var collection = parent.get(target);
         if (collection instanceof Backbone.Collection) {
           return collection.at(expression.index);
         } else {
@@ -206,6 +213,10 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
           throw new Error("Unable to access collection item because the object is not a Backbone collection");
         }
       };
+      this.has = function (target) {
+        var collection = parent.get(target);
+        return collection.length > expression.index;
+      },
       this.set = function (target, value) {
         throw ("Setting a collection item is not supported by modelbinding. Elements in the view can only be bound to the attributes of collection items, not the collection items themselves");
       };
@@ -286,6 +297,9 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       },
       setValue: function (value) {
         this.accessor.set(this.target, value);
+      },
+      hasValue: function () {
+        return this.accessor.has(this.target);
       }
     });
 
@@ -614,10 +628,12 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       view.$(selector).each(function (index) {
         var element = view.$(this);
         var bindingAttr = config.getBindingAttr('checkbox');
-        var attribute_name = config.getBindingValue(element, 'checkbox');
+        var attribute_path = config.getBindingValue(element, 'checkbox');
+        if (!attribute_path) return;
 
-        var modelChange = function (model, val) {
-          if (val) {
+        var changeTracker = modelAccess.changeTrackerFor(model, attribute_path);
+        var modelChange = function (ev) {
+          if (ev.value) {
             element.attr("checked", "checked");
           }
           else {
@@ -625,25 +641,18 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
           }
         };
 
-        var setModelValue = function (attr_name, value) {
-          var data = {};
-          data[attr_name] = value;
-          model.set(data);
-        };
-
         var elementChange = function (ev) {
           var changedElement = view.$(ev.target);
           var checked = changedElement.is(":checked") ? true : false;
-          setModelValue(attribute_name, checked);
+          changeTracker.setValue(checked);
         };
 
-        modelBinder.registerModelBinding(model, attribute_name, modelChange);
+        modelBinder.registerChangeTrackerBinding(changeTracker, modelChange);
         modelBinder.registerElementBinding(element, elementChange);
 
-        var attr_exists = model.attributes.hasOwnProperty(attribute_name);
-        if (attr_exists) {
+        if (changeTracker.hasValue()) {
           // set the default value on the form, from the model
-          var attr_value = model.get(attribute_name);
+          var attr_value = changeTracker.getValue();
           if (typeof attr_value !== "undefined" && attr_value !== null && attr_value != false) {
             element.attr("checked", "checked");
           }
@@ -653,7 +662,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         } else {
           // bind the form's value to the model
           var checked = element.is(":checked") ? true : false;
-          setModelValue(attribute_name, checked);
+          changeTracker.setValue(checked);
         }
       });
     };
