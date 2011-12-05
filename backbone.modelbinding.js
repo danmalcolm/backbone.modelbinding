@@ -64,9 +64,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         collectionItemAccess = function () {
           var number;
           next("[");
-          white();
           number = integer();
-          white();
           next("]");
           return { type: "collectionItemAccess", index: number, text: "[" + number + "]" };
         },
@@ -741,7 +739,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
 
         dataBindConfigList.push({
           elementAttr: databind[0],
-          modelAttr: databind[1]
+          modelAttrPath: databind[1]
         });
       });
       return dataBindConfigList;
@@ -757,14 +755,14 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         var databindList = splitBindingAttr(element);
 
         _.each(databindList, function (databind) {
-          var modelChange = function (model, val) {
-            setOnElement(element, databind.elementAttr, val);
+          var modelChange = function (ev) {
+            setOnElement(element, databind.elementAttr, ev.value);
           };
-
-          modelBinder.registerModelBinding(model, databind.modelAttr, modelChange);
+          var changeTracker = modelAccess.changeTrackerFor(model, databind.modelAttrPath);
+          modelBinder.registerChangeTrackerBinding(changeTracker, modelChange);
 
           // set default on data-bind element
-          setOnElement(element, databind.elementAttr, model.get(databind.modelAttr));
+          setOnElement(element, databind.elementAttr, changeTracker.getValue());
         });
 
       });
