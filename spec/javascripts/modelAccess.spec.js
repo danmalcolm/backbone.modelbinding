@@ -1,8 +1,9 @@
-describe("Model Attr Accessor", function () {
+describe("Model Access", function () {
+  Backbone.ModelBinding.ModelAccess = (function () {
 
-  var ModelAttrAccessor = (function () {
-
-    var parse = function () {
+    // Converts path expression string, e.g. "manufacturer.name" to a sequence of objects with data about
+    // the parts of the expression
+    var parsePathExpression = function () {
       var error = function (description) {
         var message = "Unexpected syntax at position " + index + " in model path '" + text + "': " + description;
         throw {
@@ -17,7 +18,7 @@ describe("Model Attr Accessor", function () {
           white();
           while (current) {
             result.push(expression(first));
-            if (white() && current) { // whitespace gobbled but more left, oh no!
+            if (white() && current) { // there was some whitespace but not at end, oh no!
               error("Unexpected whitespace in middle of path");
             }
             first = false;
@@ -104,15 +105,17 @@ describe("Model Attr Accessor", function () {
     } ();
 
     // ----------------------------
-    // Accessors - Responsible for getting / setting values specified by a path from the target object (Backbone model or collection). 
+    // Accessors - Responsible for getting / setting values specified by a path expression (e.g."manufacturer.name") 
+    // on a target object (Backbone model or collection). 
     // 
-    // Each accessor uses its parent to get the previous value in the chain, before retrieving its specified value
-    // For example, building an accessor for path "manufacturer.name" would result in the following hierarchy
+    // A deep path will result in a chain of accessors, for example, an accessor for path "manufacturer.name" would 
+    // result in the following hierarchy:
+    //
     // RootAccessor - retrieves the root model
     // > AttrAccessor - retrieves the "manufacturer" attr of the root model
-    //   > AttrAccessor - retrieves the "name" attr of the Model referenced by previous "manufacturer" expression
+    //   > AttrAccessor - retrieves the "name" attr of the Model referenced by parent "manufacturer" expression
     //
-    // Accessors do not hold a reference to a specific target but used by AttrBinder (below) for:
+    // Accessors do not hold a reference to a specific target but are used by ModelChangeTracker (below) for:
     // 1. accessing attr values
     // 2. binding events to models and collections along the chain
     // ----------------------------
@@ -130,15 +133,25 @@ describe("Model Attr Accessor", function () {
     // Accesses an attribute of a Backbone.Model instance
     var AttrAccessor = function (parent, expression) {
       this.get = function (target) {
+        var model = this.getModel(target);
+        return model ? model.get(expression.name) : undefined;
+      };
+      this.set = function (target, value) {
+        var model = this.getModel(target);
+        if (model) {
+          var attrs = {};
+          attrs[expression.name] = value;
+          model.set(attrs);
+        }
+      },
+      this.getModel = function (target) {
         var model = parent.get(target);
         if (!model) {
-          // if model not available, then the attr is undefined
-          return undefined;
+          return model;
         }
-        if (model instanceof Backbone.Model)
-          return model.get(expression.name);
-        else
-          throw new Error('The object referenced by expression "' + expression.text + '" is not a Backbone model and is not suitable for databinding');
+        if (!model instanceof Backbone.Model)
+          throw new Error('The object referenced by expression "' + expression.text + '" is not a Backbone model and is not suitable for modelbinding');
+        return model;
       };
       this.bindToTarget = function (target, callback, context) {
         var eventBindings = [];
@@ -154,23 +167,25 @@ describe("Model Attr Accessor", function () {
     };
     AttrAccessor.expressionType = "attributeAccess";
 
-    // Access model within a Backbone.Collection
+    // Access model within a Backbone.Collection by index
     var CollectionItemAccessor = function (parent, expression) {
       this.get = function (model) {
         var collection = parent.get(model);
-        if (_.isArray(collection)) {
-          return collection[expression.index];
-        } else if (collection instanceof Backbone.Collection) {
+        if (collection instanceof Backbone.Collection) {
           return collection.at(expression.index);
         } else {
-          throw new Error("Unable to access collection item because the object is not an array or Backbone collection");
+          // could support arrays, but no events on add / remove
+          throw new Error("Unable to access collection item because the object is not a Backbone collection");
         }
+      };
+      this.set = function (target, value) {
+        throw ("Setting a collection item is not supported by modelbinding. Elements in the view can only be bound to the attributes of collection items, not the collection items themselves");
       };
       this.bindToTarget = function (target, callback, context) {
         var eventBindings = [];
         var collection = parent.get(target);
         if (collection instanceof Backbone.Collection) {
-          // track events that might affect position of item
+          // track events that affect position of item
           var events = ["add", "remove", "reset"];
           _.each(events, function (event) {
             collection.bind(event, callback, context);
@@ -183,8 +198,8 @@ describe("Model Attr Accessor", function () {
     };
     CollectionItemAccessor.expressionType = "collectionItemAccess";
 
-    // Records events that have been bound to a target model or collection with an AttrBinder's change callback function
-    // to allow them to be unbound later on
+    // Tracks model or collection events bound to the "change" callback of ModelChangeTracker
+    // so they can be unbound
     var TargetEventBinding = function (target, events) {
       this.unbindFromTarget = function (callback) {
         _.each(events, function (event) {
@@ -196,7 +211,7 @@ describe("Model Attr Accessor", function () {
     var accessorTypes = [AttrAccessor, CollectionItemAccessor];
 
     var buildAccessor = function (path) {
-      var expressions = parse(path);
+      var expressions = parsePathExpression(path);
       var accessor = _.reduce(expressions, function (parent, expression) {
         var accessorType = _.detect(accessorTypes, function (a) { return a.expressionType === expression.type; });
         return new accessorType(parent, expression);
@@ -206,24 +221,24 @@ describe("Model Attr Accessor", function () {
     };
 
     // ----------------------------
-    // AttrBinder - Responsible for mediating between a DOM element and model attribute specified by a path.
-    // Listens out for changes to objects
-    // 
+    // ModelChangeTracker - Manages get / set of attr specified by a path expression and monitors for changes to
+    // the specified attribute// 
     // ----------------------------
-    var AttrBinder = function (target, accessor) {
+    var ModelChangeTracker = function (target, accessor) {
       this.target = target;
       this.accessor = accessor;
       this.currentValue = this.getValue(this.target);
       this.currentBindings = [];
       this.bindToTargets();
     };
-    _.extend(AttrBinder.prototype, Backbone.Events, {
+    _.extend(ModelChangeTracker.prototype, Backbone.Events, {
       change: function () {
         this.triggerChange();
         // As any target along chain could have changed, we need to rebind to each.
-        // (certain types of change don't require rebinding but simpler just to rebind)
-        this.resetExistingBindings();
-        this.bindToTargets(); 
+        // (certain types of change (attr at end of chain) don't require rebinding 
+        // but simpler just to rebind)
+        this.unbindFromTargets();
+        this.bindToTargets();
       },
       triggerChange: function () {
         var value = this.getValue();
@@ -232,14 +247,17 @@ describe("Model Attr Accessor", function () {
         }
         this.currentValue = value;
       },
+      unbindFromTargets: function () {
+        _.each(this.currentBindings, function (b) { b.unbindFromTarget(); });
+      },
       bindToTargets: function () {
         this.currentBindings = this.accessor.bindToTarget(this.target, this.change, this);
       },
-      resetExistingBindings: function () {
-        _.each(this.currentBindings, function (b) { b.unbindFromTarget(); });
-      },
       getValue: function () {
         return this.accessor.get(this.target);
+      },
+      setValue: function (value) {
+        this.accessor.set(this.target, value);
       }
     });
 
@@ -248,14 +266,15 @@ describe("Model Attr Accessor", function () {
         var accessor = buildAccessor(path);
         return accessor;
       },
-      attrBinderFor: function (target, path) {
+      changeTrackerFor: function (target, path) {
         var accessor = this.accessorFor(path);
-        var binder = new AttrBinder(target, accessor);
+        var binder = new ModelChangeTracker(target, accessor);
         return binder;
       }
     };
   })();
 
+  var ModelAccess = Backbone.ModelBinding.ModelAccess;
   var Product = Backbone.Model.extend({});
   var Manufacturer = Backbone.Model.extend({});
   var Review = Backbone.Model.extend({});
@@ -283,12 +302,12 @@ describe("Model Attr Accessor", function () {
   describe("Attr Accessor Creation", function () {
 
     var bad = function (path) {
-      //ModelAttrAccessor.create(path); // uncomment to see the exception
-      expect(function () { return ModelAttrAccessor.accessorFor(path); }).toThrow();
+      //modelAccess.accessorFor(path); // uncomment to see the exception
+      expect(function () { return ModelAccess.accessorFor(path); }).toThrow();
     };
 
     var good = function (path, target, expected) {
-      var accessor = ModelAttrAccessor.accessorFor(path);
+      var accessor = ModelAccess.accessorFor(path);
       var value = accessor.get(target);
       expect(value).toEqual(expected);
     };
@@ -352,13 +371,13 @@ describe("Model Attr Accessor", function () {
   });
 
 
-  describe("Value binding", function () {
+  describe("Model Change Tracking", function () {
 
-    var attrBinder;
-    var attrBinderEvents = [];
+    var changeTracker;
+    var changeTrackerEvents = [];
 
     beforeEach(function () {
-      attrBinderEvents = [];
+      changeTrackerEvents = [];
       this.addMatchers({
 
         toContainEventsWithValues: function (expectedValues) {
@@ -376,14 +395,22 @@ describe("Model Attr Accessor", function () {
             return "Expected no values changes to be recorded, but actual values were " + JSON.stringify(actualValues);
           };
           return actualValues.length == 0;
+        },
+        toHaveAttrValue: function (attr, expectedValue) {
+          var model = this.actual;
+          var actualValue = model.get(attr);
+          this.message = function () {
+            return "Expected value of attr to be " + JSON.stringify(expectedValue) + " but was " + JSON.stringify(actualValue);
+          };
+          return actualValue === expectedValue;
         }
       });
     });
 
     var createAccessor = function (target, path) {
-      attrBinder = ModelAttrAccessor.attrBinderFor(target, path);
-      attrBinder.bind("change", function (event) {
-        attrBinderEvents.push(event);
+      changeTracker = ModelAccess.changeTrackerFor(target, path);
+      changeTracker.bind("change", function (event) {
+        changeTrackerEvents.push(event);
       });
     };
 
@@ -395,7 +422,12 @@ describe("Model Attr Accessor", function () {
 
       it("should notify of changes to attr", function () {
         product.set({ name: "New Name!" });
-        expect(attrBinderEvents).toContainEventsWithValues(["New Name!"]);
+        expect(changeTrackerEvents).toContainEventsWithValues(["New Name!"]);
+      });
+
+      it("should be able to set attr", function () {
+        changeTracker.setValue("New Name!");
+        expect(product).toHaveAttrValue("name", "New Name!");
       });
     });
 
@@ -407,38 +439,42 @@ describe("Model Attr Accessor", function () {
 
       it("should notify of changes to attr", function () {
         product.get("manufacturer").set({ name: "New Name!" });
-        expect(attrBinderEvents).toContainEventsWithValues(["New Name!"]);
+        expect(changeTrackerEvents).toContainEventsWithValues(["New Name!"]);
+      });
+
+      it("should be able to set attr", function () {
+        changeTracker.setValue("New Name!");
+        expect(product.get("manufacturer")).toHaveAttrValue("name", "New Name!");
       });
 
       it("should notify when nested model unset, resulting in undefined value", function () {
         product.unset("manufacturer");
-        expect(attrBinderEvents.length).toEqual(1);
-        expect(attrBinderEvents).toContainEventsWithValues([undefined]);
+        expect(changeTrackerEvents.length).toEqual(1);
+        expect(changeTrackerEvents).toContainEventsWithValues([undefined]);
       });
-
 
       it("should notify when nested model set to null, resulting in undefined value", function () {
         product.set({ manufacturer: null });
-        expect(attrBinderEvents.length).toEqual(1);
-        expect(attrBinderEvents).toContainEventsWithValues([undefined]);
+        expect(changeTrackerEvents.length).toEqual(1);
+        expect(changeTrackerEvents).toContainEventsWithValues([undefined]);
       });
 
       it("should retrieve undefined value when nested model is null", function () {
         product.set({ manufacturer: null });
-        expect(attrBinder.getValue()).toBeUndefined();
+        expect(changeTracker.getValue()).toBeUndefined();
       });
 
       it("should notify when parent nested model changes", function () {
         product.set({ manufacturer: manufacturer2 });
-        expect(attrBinderEvents.length).toEqual(1);
-        expect(attrBinderEvents[0].value).toEqual(manufacturer2.get("name"));
+        expect(changeTrackerEvents.length).toEqual(1);
+        expect(changeTrackerEvents[0].value).toEqual(manufacturer2.get("name"));
       });
 
       it("should not notify about changes to original nested model after it has been replaced", function () {
         product.set({ manufacturer: manufacturer2 });
-        attrBinderEvents = [];
+        changeTrackerEvents = [];
         manufacturer1.set({ name: "New Name!!" });
-        expect(attrBinderEvents).toContainNoEvents();
+        expect(changeTrackerEvents).toContainNoEvents();
       });
 
       it("should unbind from nested model when it has been replaced", function () {
@@ -449,7 +485,7 @@ describe("Model Attr Accessor", function () {
       it("should not trigger change if nested model changed to model with equal attr value", function () {
         manufacturer2.set({ name: manufacturer1.get("name") });
         product.set({ manufacturer: manufacturer2 });
-        expect(attrBinderEvents).toContainNoEvents();
+        expect(changeTrackerEvents).toContainNoEvents();
       });
 
 
@@ -465,20 +501,25 @@ describe("Model Attr Accessor", function () {
 
       it("should notify of changes to attr", function () {
         collection.at(1).set({ title: "New Title!" });
-        expect(attrBinderEvents).toContainEventsWithValues(["New Title!"]);
+        expect(changeTrackerEvents).toContainEventsWithValues(["New Title!"]);
       });
 
-      it("should notify when item removed, resulting in different model at specified position", function () {
+      it("should be able to set attr", function () {
+        changeTracker.setValue("New Title!");
+        expect(collection.at(1)).toHaveAttrValue("title", "New Title!");
+      });
+
+      it("should notify when item removed, which results in different model at specified position", function () {
         collection.remove(collection.at(1));
-        expect(attrBinderEvents).toContainEventsWithValues([review3.get("title")]);
+        expect(changeTrackerEvents).toContainEventsWithValues([review3.get("title")]);
       });
 
       it("should notify when item added, resulting in different model at specified position", function () {
         var date = new Date(review2.get("date"));
         date.setDate(date.getDate() - 1);
         var newReview = new Review({ title: "New Review!", date: date });
-        collection.add(newReview); // Collection sorted by date, so this will be at index 1
-        expect(attrBinderEvents).toContainEventsWithValues([newReview.get("title")]);
+        collection.add(newReview); // Collection sorted by date, so newReview will by in position 1
+        expect(changeTrackerEvents).toContainEventsWithValues([newReview.get("title")]);
       });
 
     });
