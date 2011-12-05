@@ -10,31 +10,310 @@
 // Backbone.ModelBinding
 // ----------------------------
 
-Backbone.ModelBinding = (function(Backbone, _, $){
-  modelBinding = {
+Backbone.ModelBinding = (function (Backbone, _, $) {
+  var modelBinding = {
     version: "0.4.1",
 
-    bind: function(view, options){
+    bind: function (view, options) {
       view.modelBinder = new ModelBinder(view, options);
       view.modelBinder.bind();
     },
 
-    unbind: function(view){
-      if (view.modelBinder){
+    unbind: function (view) {
+      if (view.modelBinder) {
         view.modelBinder.unbind()
       }
     }
   };
 
-  ModelBinder = function(view, options){
+  // scope containing functionality for binding to attr specified by path
+  var modelAccess = (function () {
+
+    // Converts path expression string, e.g. "manufacturer.name" to a sequence of objects with data about
+    // the parts of the expression
+    var parsePathExpression = function () {
+      var error = function (description) {
+        var message = "Unexpected syntax at position " + index + " in model path '" + text + "': " + description;
+        throw {
+          name: "SyntaxError",
+          message: message,
+          index: index,
+          text: text
+        };
+      },
+        expressionChain = function () {
+          var result = [], first = true;
+          white();
+          while (current) {
+            result.push(expression(first));
+            if (white() && current) { // there was some whitespace but not at end, oh no!
+              error("Unexpected whitespace in middle of path");
+            }
+            first = false;
+          }
+          return result;
+        },
+        expression = function (first) {
+          switch (current) {
+            case "[":
+              return collectionItemAccess(first);
+            default:
+              return attributeAccess(first);
+          }
+        },
+        collectionItemAccess = function () {
+          var number;
+          next("[");
+          white();
+          number = integer();
+          white();
+          next("]");
+          return { type: "collectionItemAccess", index: number, text: "[" + number + "]" };
+        },
+        integer = function () {
+          var number, string = "";
+          while (current >= "0" && current <= "9") {
+            string += current;
+            next();
+          }
+          if (!string) {
+            error("Expected a positive number");
+          }
+          number = +string;
+          return number;
+        },
+        attributeAccess = function (first) {
+          var text = "", attrName;
+          if (!first) {
+            text = next(".");
+          }
+          attrName = name();
+          text += attrName;
+          return { type: "attributeAccess", name: attrName, text: text };
+        },
+        name = function () {
+          var string = "";
+          if (!/[A-Za-z_]/.test(current)) {
+            error("Names used to access an attribute must start with a character or underscore");
+          }
+          string += next();
+          while (/[A-Za-z_0-9]/.test(current)) {
+            string += next();
+          }
+          return string;
+        },
+        next = function (expected) {
+          if (expected && expected != current) {
+            error("Expected '" + expected + "' instead of '" + current + "'");
+          }
+          var previous = text.charAt(index);
+          index += 1;
+          current = text.charAt(index);
+          return previous;
+        },
+        white = function () {
+          var space = "";
+          while (current && current <= ' ') {
+            space += next();
+          }
+          return space;
+        };
+      var text, index, current;
+      return function (path) {
+        var result;
+        text = path;
+        index = 0;
+        current = (text.length > 0) ? text[index] : "";
+        result = expressionChain();
+        if (current) {
+          error("Unrecognised syntax");
+        }
+        return result;
+      };
+    } ();
+
+    // ----------------------------
+    // Accessors - Responsible for getting / setting values specified by a path expression (e.g."manufacturer.name") 
+    // on a target object (Backbone model or collection). 
+    // 
+    // A deep path will result in a chain of accessors, for example, an accessor for path "manufacturer.name" would 
+    // result in the following hierarchy:
+    //
+    // RootAccessor - retrieves the root model
+    // > AttrAccessor - retrieves the "manufacturer" attr of the root model
+    //   > AttrAccessor - retrieves the "name" attr of the Model referenced by parent "manufacturer" expression
+    //
+    // Accessors do not hold a reference to a specific target but are used by ModelChangeTracker (below) for:
+    // 1. accessing attr values
+    // 2. binding events to models and collections along the chain
+    // ----------------------------
+
+    // References the root model at the start of a chain of access expressions
+    var RootAccessor = function () {
+      this.get = function (target) {
+        return target;
+      };
+      this.bindToTarget = function () {
+        return [];
+      };
+    };
+
+    // Accesses an attribute of a Backbone.Model instance
+    var AttrAccessor = function (parent, expression) {
+      this.get = function (target) {
+        var model = this.getModel(target);
+        return model ? model.get(expression.name) : undefined;
+      };
+      this.set = function (target, value) {
+        var model = this.getModel(target);
+        if (model) {
+          var attrs = {};
+          attrs[expression.name] = value;
+          model.set(attrs);
+        }
+      },
+      this.getModel = function (target) {
+        var model = parent.get(target);
+        if (!model) {
+          return model;
+        }
+        if (!model instanceof Backbone.Model)
+          throw new Error('The object referenced by expression "' + expression.text + '" is not a Backbone model and is not suitable for modelbinding');
+        return model;
+      };
+      this.bindToTarget = function (target, callback, context) {
+        var eventBindings = [];
+        var model = parent.get(target);
+        if (model instanceof Backbone.Model) {
+          var event = "change:" + expression.name;
+          model.bind(event, callback, context);
+          eventBindings.push(new TargetEventBinding(model, [event]));
+        }
+        var parentEventBindings = parent.bindToTarget(target, callback, context);
+        return eventBindings.concat(parentEventBindings);
+      };
+    };
+    AttrAccessor.expressionType = "attributeAccess";
+
+    // Access model within a Backbone.Collection by index
+    var CollectionItemAccessor = function (parent, expression) {
+      this.get = function (model) {
+        var collection = parent.get(model);
+        if (collection instanceof Backbone.Collection) {
+          return collection.at(expression.index);
+        } else {
+          // could support arrays, but no events on add / remove
+          throw new Error("Unable to access collection item because the object is not a Backbone collection");
+        }
+      };
+      this.set = function (target, value) {
+        throw ("Setting a collection item is not supported by modelbinding. Elements in the view can only be bound to the attributes of collection items, not the collection items themselves");
+      };
+      this.bindToTarget = function (target, callback, context) {
+        var eventBindings = [];
+        var collection = parent.get(target);
+        if (collection instanceof Backbone.Collection) {
+          // track events that affect position of item
+          var events = ["add", "remove", "reset"];
+          _.each(events, function (event) {
+            collection.bind(event, callback, context);
+          });
+          eventBindings.push(new TargetEventBinding(collection, events));
+        }
+        var parentEventBindings = parent.bindToTarget(target, callback, context);
+        return eventBindings.concat(parentEventBindings);
+      };
+    };
+    CollectionItemAccessor.expressionType = "collectionItemAccess";
+
+    // Tracks model or collection events bound to the "change" callback of ModelChangeTracker
+    // so they can be unbound
+    var TargetEventBinding = function (target, events) {
+      this.unbindFromTarget = function (callback) {
+        _.each(events, function (event) {
+          target.unbind(event, callback);
+        }, this);
+      };
+    };
+
+    var accessorTypes = [AttrAccessor, CollectionItemAccessor];
+
+    var buildAccessor = function (path) {
+      var expressions = parsePathExpression(path);
+      var accessor = _.reduce(expressions, function (parent, expression) {
+        var accessorType = _.detect(accessorTypes, function (a) { return a.expressionType === expression.type; });
+        return new accessorType(parent, expression);
+      }, new RootAccessor(), this);
+
+      return accessor;
+    };
+
+    // ----------------------------
+    // ModelChangeTracker - Manages get / set of attr specified by a path expression and monitors for changes to
+    // the specified attribute// 
+    // ----------------------------
+    var ModelChangeTracker = function (target, accessor) {
+      this.target = target;
+      this.accessor = accessor;
+      this.currentValue = this.getValue(this.target);
+      this.currentBindings = [];
+      this.bindToTargets();
+    };
+    _.extend(ModelChangeTracker.prototype, Backbone.Events, {
+      change: function () {
+        this.triggerChange();
+        // The targets along chain that we need to bind to may be different instances,
+        // so we need to rebind. Certain types of change (attr change at end of chain) 
+        // don't require a rebind - could optimise for this...
+        this.unbindFromTargets();
+        this.bindToTargets();
+      },
+      triggerChange: function () {
+        var value = this.getValue();
+        if (value !== this.currentValue) {
+          this.trigger("change", { value: value });
+        }
+        this.currentValue = value;
+      },
+      unbindFromTargets: function () {
+        _.each(this.currentBindings, function (b) { b.unbindFromTarget(); });
+      },
+      bindToTargets: function () {
+        this.currentBindings = this.accessor.bindToTarget(this.target, this.change, this);
+      },
+      getValue: function () {
+        return this.accessor.get(this.target);
+      },
+      setValue: function (value) {
+        this.accessor.set(this.target, value);
+      }
+    });
+
+    return {
+      accessorFor: function (path) {
+        var accessor = buildAccessor(path);
+        return accessor;
+      },
+      changeTrackerFor: function (target, path) {
+        var accessor = this.accessorFor(path);
+        var binder = new ModelChangeTracker(target, accessor);
+        return binder;
+      }
+    };
+  })();
+
+  modelBinding.modelAccess = modelAccess; // expose for testing
+
+  ModelBinder = function (view, options) {
     this.config = new modelBinding.Configuration(options);
+    this.changeTrackerBindings = [];
     this.modelBindings = [];
     this.elementBindings = [];
 
-    this.bind = function(){
+    this.bind = function () {
       var conventions = modelBinding.Conventions;
-      for (var conventionName in conventions){
-        if (conventions.hasOwnProperty(conventionName)){
+      for (var conventionName in conventions) {
+        if (conventions.hasOwnProperty(conventionName)) {
           var conventionElement = conventions[conventionName];
           var handler = conventionElement.handler;
           var conventionSelector = conventionElement.selector;
@@ -43,58 +322,69 @@ Backbone.ModelBinding = (function(Backbone, _, $){
       }
     }
 
-    this.unbind = function(){
+    this.unbind = function () {
+
+      _.each(this.changeTrackerBindings, function (binding) {
+        binding.changeTracker.unbindFromTargets();
+        binding.changeTracker.unbind("change", binding.callback);
+      });
+
       // unbind the html element bindings
-      _.each(this.elementBindings, function(binding){
+      _.each(this.elementBindings, function (binding) {
         binding.element.unbind(binding.eventName, binding.callback);
       });
 
       // unbind the model bindings
-      _.each(this.modelBindings, function(binding){
+      _.each(this.modelBindings, function (binding) {
         binding.model.unbind(binding.eventName, binding.callback);
       });
     }
 
-    this.registerModelBinding = function(model, attribute_name, callback){
+    this.registerChangeTrackerBinding = function (changeTracker, callback) {
+      changeTracker.bind("change", callback);
+      this.changeTrackerBindings.push({ changeTracker: changeTracker, callback: callback });
+    },
+
+    this.registerModelBinding = function (model, attribute_name, callback) {
       // bind the model changes to the form elements
       var eventName = "change:" + attribute_name;
       model.bind(eventName, callback);
-      this.modelBindings.push({model: model, eventName: eventName, callback: callback});
+      this.modelBindings.push({ model: model, eventName: eventName, callback: callback });
     }
 
-    this.registerElementBinding = function(element, callback){
+    this.registerElementBinding = function (element, callback) {
       // bind the form changes to the model
       element.bind("change", callback);
-      this.elementBindings.push({element: element, eventName: "change", callback: callback});
+      this.elementBindings.push({ element: element, eventName: "change", callback: callback });
     }
   }
 
   // ----------------------------
   // Model Binding Configuration
   // ----------------------------
-  modelBinding.Configuration = function(options){
+  modelBinding.Configuration = function (options) {
     this.bindingAttrConfig = {};
 
-    _.extend(this.bindingAttrConfig, 
+    _.extend(this.bindingAttrConfig,
       modelBinding.Configuration.bindindAttrConfig,
       options
     );
 
-    if (this.bindingAttrConfig.all){
+    if (this.bindingAttrConfig.all) {
       var attr = this.bindingAttrConfig.all;
       delete this.bindingAttrConfig.all;
-      for (var inputType in this.bindingAttrConfig){
-        if (this.bindingAttrConfig.hasOwnProperty(inputType)){
+      for (var inputType in this.bindingAttrConfig) {
+        if (this.bindingAttrConfig.hasOwnProperty(inputType)) {
           this.bindingAttrConfig[inputType] = attr;
         }
       }
     }
 
-    this.getBindingAttr = function(type){ 
-      return this.bindingAttrConfig[type]; 
+    this.getBindingAttr = function (type) {
+      return this.bindingAttrConfig[type];
     };
 
-    this.getBindingValue = function(element, type){
+    this.getBindingValue = function (element, type) {
       var bindingAttr = this.getBindingAttr(type);
       return element.attr(bindingAttr);
     };
@@ -117,23 +407,23 @@ Backbone.ModelBinding = (function(Backbone, _, $){
 
   };
 
-  modelBinding.Configuration.store = function(){
+  modelBinding.Configuration.store = function () {
     modelBinding.Configuration.originalConfig = _.clone(modelBinding.Configuration.bindindAttrConfig);
   };
 
-  modelBinding.Configuration.restore = function(){
+  modelBinding.Configuration.restore = function () {
     modelBinding.Configuration.bindindAttrConfig = modelBinding.Configuration.originalConfig;
   };
 
-  modelBinding.Configuration.configureBindingAttributes = function(options){
-    if (options.all){
+  modelBinding.Configuration.configureBindingAttributes = function (options) {
+    if (options.all) {
       this.configureAllBindingAttributes(options.all);
       delete options.all;
     }
     _.extend(modelBinding.Configuration.bindindAttrConfig, options);
   };
 
-  modelBinding.Configuration.configureAllBindingAttributes = function(attribute){
+  modelBinding.Configuration.configureAllBindingAttributes = function (attribute) {
     var config = modelBinding.Configuration.bindindAttrConfig;
     config.text = attribute;
     config.textarea = attribute;
@@ -152,51 +442,48 @@ Backbone.ModelBinding = (function(Backbone, _, $){
   // ----------------------------
   // Text, Textarea, and Password Bi-Directional Binding Methods
   // ----------------------------
-  StandardBinding = (function(Backbone){
+  StandardBinding = (function (Backbone) {
     var methods = {};
 
-    var _getElementType = function(element) {
+    var _getElementType = function (element) {
       var type = element[0].tagName.toLowerCase();
-      if (type == "input"){
+      if (type == "input") {
         type = element.attr("type");
-        if (type == undefined || type == ''){
+        if (type == undefined || type == '') {
           type = 'text';
         }
       }
       return type;
     };
 
-    methods.bind = function(selector, view, model, config){
+    methods.bind = function (selector, view, model, config) {
       var modelBinder = this;
 
-      view.$(selector).each(function(index){
+      view.$(selector).each(function (index) {
         var element = view.$(this);
         var elementType = _getElementType(element);
-        var attribute_name = config.getBindingValue(element, elementType);
+        var attribute_path = config.getBindingValue(element, elementType);
+        if (!attribute_path) return;
 
-        var modelChange = function(changed_model, val){ element.val(val); };
+        var changeTracker = modelAccess.changeTrackerFor(model, attribute_path);
 
-        var setModelValue = function(attr_name, value){
-          var data = {};
-          data[attr_name] = value;
-          model.set(data);
+        var modelChange = function (ev) { element.val(ev.value); };
+
+        var elementChange = function (ev) {
+          changeTracker.setValue(view.$(ev.target).val());
         };
 
-        var elementChange = function(ev){
-          setModelValue(attribute_name, view.$(ev.target).val());
-        };
-
-        modelBinder.registerModelBinding(model, attribute_name, modelChange);
+        modelBinder.registerChangeTrackerBinding(changeTracker, modelChange);
         modelBinder.registerElementBinding(element, elementChange);
 
         // set the default value on the form, from the model
-        var attr_value = model.get(attribute_name);
+        var attr_value = changeTracker.getValue();
         if (typeof attr_value !== "undefined" && attr_value !== null) {
           element.val(attr_value);
         } else {
           var elVal = element.val();
-          if (elVal){
-            setModelValue(attribute_name, elVal);
+          if (elVal) {
+            changeTracker.setValue(elVal);
           }
         }
       });
@@ -208,26 +495,26 @@ Backbone.ModelBinding = (function(Backbone, _, $){
   // ----------------------------
   // Select Box Bi-Directional Binding Methods
   // ----------------------------
-  SelectBoxBinding = (function(Backbone){
+  SelectBoxBinding = (function (Backbone) {
     var methods = {};
 
-    methods.bind = function(selector, view, model, config){
+    methods.bind = function (selector, view, model, config) {
       var modelBinder = this;
 
-      view.$(selector).each(function(index){
+      view.$(selector).each(function (index) {
         var element = view.$(this);
         var attribute_name = config.getBindingValue(element, 'select');
 
-        var modelChange = function(changed_model, val){ element.val(val); };
+        var modelChange = function (changed_model, val) { element.val(val); };
 
-        var setModelValue = function(attr, val, text){
+        var setModelValue = function (attr, val, text) {
           var data = {};
           data[attr] = val;
           data[attr + "_text"] = text;
           model.set(data);
         };
 
-        var elementChange = function(ev){
+        var elementChange = function (ev) {
           var targetEl = view.$(ev.target);
           var value = targetEl.val();
           var text = targetEl.find(":selected").text();
@@ -241,7 +528,7 @@ Backbone.ModelBinding = (function(Backbone, _, $){
         var attr_value = model.get(attribute_name);
         if (typeof attr_value !== "undefined" && attr_value !== null) {
           element.val(attr_value);
-        } 
+        }
 
         // set the model to the form's value if there is no model value
         if (element.val() != attr_value) {
@@ -258,14 +545,14 @@ Backbone.ModelBinding = (function(Backbone, _, $){
   // ----------------------------
   // Radio Button Group Bi-Directional Binding Methods
   // ----------------------------
-  RadioGroupBinding = (function(Backbone){
+  RadioGroupBinding = (function (Backbone) {
     var methods = {};
 
-    methods.bind = function(selector, view, model, config){
+    methods.bind = function (selector, view, model, config) {
       var modelBinder = this;
 
       var foundElements = [];
-      view.$(selector).each(function(index){
+      view.$(selector).each(function (index) {
         var element = view.$(this);
 
         var group_name = config.getBindingValue(element, 'radio');
@@ -273,28 +560,28 @@ Backbone.ModelBinding = (function(Backbone, _, $){
           foundElements[group_name] = true;
           var bindingAttr = config.getBindingAttr('radio');
 
-          var modelChange = function(model, val){
+          var modelChange = function (model, val) {
             var value_selector = "input[type=radio][" + bindingAttr + "=" + group_name + "][value=" + val + "]";
             view.$(value_selector).attr("checked", "checked");
           };
           modelBinder.registerModelBinding(model, group_name, modelChange);
 
-          var setModelValue = function(attr, val){
+          var setModelValue = function (attr, val) {
             var data = {};
             data[attr] = val;
             model.set(data);
           };
 
           // bind the form changes to the model
-          var elementChange = function(ev){
+          var elementChange = function (ev) {
             var element = view.$(ev.currentTarget);
-            if (element.is(":checked")){
+            if (element.is(":checked")) {
               setModelValue(group_name, element.val());
             }
           };
 
           var group_selector = "input[type=radio][" + bindingAttr + "=" + group_name + "]";
-          view.$(group_selector).each(function(){
+          view.$(group_selector).each(function () {
             var groupEl = $(this);
             modelBinder.registerElementBinding(groupEl, elementChange);
           });
@@ -320,35 +607,35 @@ Backbone.ModelBinding = (function(Backbone, _, $){
   // ----------------------------
   // Checkbox Bi-Directional Binding Methods
   // ----------------------------
-  CheckboxBinding = (function(Backbone){
+  CheckboxBinding = (function (Backbone) {
     var methods = {};
 
-    methods.bind = function(selector, view, model, config){
+    methods.bind = function (selector, view, model, config) {
       var modelBinder = this;
 
-      view.$(selector).each(function(index){
+      view.$(selector).each(function (index) {
         var element = view.$(this);
         var bindingAttr = config.getBindingAttr('checkbox');
         var attribute_name = config.getBindingValue(element, 'checkbox');
 
-        var modelChange = function(model, val){
-          if (val){
+        var modelChange = function (model, val) {
+          if (val) {
             element.attr("checked", "checked");
           }
-          else{
+          else {
             element.removeAttr("checked");
           }
         };
 
-        var setModelValue = function(attr_name, value){
+        var setModelValue = function (attr_name, value) {
           var data = {};
           data[attr_name] = value;
           model.set(data);
         };
 
-        var elementChange = function(ev){
+        var elementChange = function (ev) {
           var changedElement = view.$(ev.target);
-          var checked = changedElement.is(":checked")? true : false;
+          var checked = changedElement.is(":checked") ? true : false;
           setModelValue(attribute_name, checked);
         };
 
@@ -362,12 +649,12 @@ Backbone.ModelBinding = (function(Backbone, _, $){
           if (typeof attr_value !== "undefined" && attr_value !== null && attr_value != false) {
             element.attr("checked", "checked");
           }
-          else{
+          else {
             element.removeAttr("checked");
           }
         } else {
           // bind the form's value to the model
-          var checked = element.is(":checked")? true : false;
+          var checked = element.is(":checked") ? true : false;
           setModelValue(attribute_name, checked);
         }
       });
@@ -379,31 +666,31 @@ Backbone.ModelBinding = (function(Backbone, _, $){
   // ----------------------------
   // Data-Bind Binding Methods
   // ----------------------------
-  DataBindBinding = (function(Backbone, _, $){
+  DataBindBinding = (function (Backbone, _, $) {
     var dataBindSubstConfig = {
       "default": ""
     };
 
-    modelBinding.Configuration.dataBindSubst = function(config){
+    modelBinding.Configuration.dataBindSubst = function (config) {
       this.storeDataBindSubstConfig();
       _.extend(dataBindSubstConfig, config);
     };
 
-    modelBinding.Configuration.storeDataBindSubstConfig = function(){
+    modelBinding.Configuration.storeDataBindSubstConfig = function () {
       modelBinding.Configuration._dataBindSubstConfig = _.clone(dataBindSubstConfig);
     };
 
-    modelBinding.Configuration.restoreDataBindSubstConfig = function(){
-      if (modelBinding.Configuration._dataBindSubstConfig){
+    modelBinding.Configuration.restoreDataBindSubstConfig = function () {
+      if (modelBinding.Configuration._dataBindSubstConfig) {
         dataBindSubstConfig = modelBinding.Configuration._dataBindSubstConfig;
         delete modelBinding.Configuration._dataBindSubstConfig;
       }
     };
 
-    modelBinding.Configuration.getDataBindSubst = function(elementType, value){
+    modelBinding.Configuration.getDataBindSubst = function (elementType, value) {
       var returnValue = value;
-      if (value === undefined){
-        if (dataBindSubstConfig.hasOwnProperty(elementType)){
+      if (value === undefined) {
+        if (dataBindSubstConfig.hasOwnProperty(elementType)) {
           returnValue = dataBindSubstConfig[elementType];
         } else {
           returnValue = dataBindSubstConfig["default"];
@@ -412,10 +699,10 @@ Backbone.ModelBinding = (function(Backbone, _, $){
       return returnValue;
     };
 
-    setOnElement = function(element, attr, val){
+    setOnElement = function (element, attr, val) {
       var valBefore = val;
       val = modelBinding.Configuration.getDataBindSubst(attr, val);
-      switch(attr){
+      switch (attr) {
         case "html":
           element.html(val);
           break;
@@ -426,25 +713,24 @@ Backbone.ModelBinding = (function(Backbone, _, $){
           element.attr("disabled", !val);
           break;
         case "displayed":
-          element[val? "show" : "hide"]();
+          element[val ? "show" : "hide"]();
           break;
         case "hidden":
-          element[val? "hide" : "show"]();
+          element[val ? "hide" : "show"]();
           break;
         default:
           element.attr(attr, val);
       }
     };
 
-    splitBindingAttr = function(element)
-    {
+    splitBindingAttr = function (element) {
       var dataBindConfigList = [];
       var databindList = element.attr("data-bind").split(";");
-      _.each(databindList, function(attrbind){
+      _.each(databindList, function (attrbind) {
         var databind = $.trim(attrbind).split(" ");
 
         // make the default special case "text" if none specified
-        if( databind.length == 1 ) databind.unshift("text");
+        if (databind.length == 1) databind.unshift("text");
 
         dataBindConfigList.push({
           elementAttr: databind[0],
@@ -456,15 +742,15 @@ Backbone.ModelBinding = (function(Backbone, _, $){
 
     var methods = {};
 
-    methods.bind = function(selector, view, model, config){
+    methods.bind = function (selector, view, model, config) {
       var modelBinder = this;
 
-      view.$(selector).each(function(index){
+      view.$(selector).each(function (index) {
         var element = view.$(this);
         var databindList = splitBindingAttr(element);
 
-        _.each(databindList, function(databind){
-          var modelChange = function(model, val){
+        _.each(databindList, function (databind) {
+          var modelChange = function (model, val) {
             setOnElement(element, databind.elementAttr, val);
           };
 
@@ -485,20 +771,20 @@ Backbone.ModelBinding = (function(Backbone, _, $){
   // Binding Conventions
   // ----------------------------
   modelBinding.Conventions = {
-    text: {selector: "input:text", handler: StandardBinding},
-    textarea: {selector: "textarea", handler: StandardBinding},
-    password: {selector: "input:password", handler: StandardBinding},
-    radio: {selector: "input:radio", handler: RadioGroupBinding},
-    checkbox: {selector: "input:checkbox", handler: CheckboxBinding},
-    select: {selector: "select", handler: SelectBoxBinding},
-    databind: { selector: "*[data-bind]", handler: DataBindBinding},
+    text: { selector: "input:text", handler: StandardBinding },
+    textarea: { selector: "textarea", handler: StandardBinding },
+    password: { selector: "input:password", handler: StandardBinding },
+    radio: { selector: "input:radio", handler: RadioGroupBinding },
+    checkbox: { selector: "input:checkbox", handler: CheckboxBinding },
+    select: { selector: "select", handler: SelectBoxBinding },
+    databind: { selector: "*[data-bind]", handler: DataBindBinding },
     // HTML5 input
-    number: {selector: "input[type=number]", handler: StandardBinding},
-    range: {selector: "input[type=range]", handler: StandardBinding},
-    tel: {selector: "input[type=tel]", handler: StandardBinding},
-    search: {selector: "input[type=search]", handler: StandardBinding},
-    url: {selector: "input[type=url]", handler: StandardBinding},
-    email: {selector: "input[type=email]", handler: StandardBinding}
+    number: { selector: "input[type=number]", handler: StandardBinding },
+    range: { selector: "input[type=range]", handler: StandardBinding },
+    tel: { selector: "input[type=tel]", handler: StandardBinding },
+    search: { selector: "input[type=search]", handler: StandardBinding },
+    url: { selector: "input[type=url]", handler: StandardBinding },
+    email: { selector: "input[type=email]", handler: StandardBinding }
   };
 
   return modelBinding;
