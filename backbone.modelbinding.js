@@ -29,9 +29,166 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
   // scope containing functionality for binding to attr specified by path
   var modelAccess = (function () {
 
+    // ----------------------------
+    // Accessors - Responsible for getting / setting values specified by a path expression (e.g."manufacturer.name") 
+    // on a target object (Backbone model, object, array or collection). 
+    // 
+    // A deep path will result in a chain of accessors, for example, an accessor for path "manufacturer.name" would 
+    // result in the following hierarchy:
+    //
+    // RootAccessor - retrieves the root model
+    // > AttrAccessor - retrieves the "manufacturer" attr of the root model
+    //   > AttrAccessor - retrieves the "name" attr of the Model referenced by parent "manufacturer" expression
+    //
+    // Accessors do not hold a reference to a specific target but are used by ModelChangeTracker (below) for:
+    // 1. accessing attr values
+    // 2. binding events to models and collections along the chain
+    // ----------------------------
+
+    // References the target object at the start of a chain of accessors
+    var RootAccessor = function () {
+      this.isRoot = true;
+      this.path = "";
+      this.get = function (target) {
+        return target;
+      };
+      this.has = function (target) {
+        return !_.isNull(target) && !_.isUndefined(target);
+      },
+      this.bindToTarget = function () {
+        return [];
+      };
+    };
+
+    // Accesses an attribute or property of a Backbone.Model or object
+    var AttrAccessor = function (parent, attrName, path) {
+      this.parent = parent;
+      this.attrName = attrName,
+      this.path = path;
+    };
+    _.extend(AttrAccessor.prototype, {
+      get: function (target) {
+        var model = this.getModel(target);
+        if (model instanceof Backbone.Model && model.has(this.attrName)) {
+          return model.get(this.attrName);
+        }
+        else if (model && !_.isFunction(model[this.attrName])) {
+          return model[this.attrName];
+        }
+        else {
+          return undefined;
+        }
+      },
+      has: function (target) {
+        var model = this.getModel(target);
+        if (model instanceof Backbone.Model && model.has(this.attrName)) {
+          return true;
+        }
+        else {
+          return model && this.attrName in model;
+        }
+      },
+      set: function (target, value) {
+        var model = this.getModel(target);
+        var mode = "prop";
+        if (model instanceof Backbone.Model) {
+          var existsAsProperty = model
+            && this.attrName in model
+            && !_.isFunction(model[this.attrName]);
+          if (model.has(this.attrName) || !existsAsProperty) {
+            // Set attribute on model if not currently attr or property
+            mode = "attr";
+          }
+        }
+        switch (mode) {
+          case "attr":
+            var attrs = {};
+            attrs[this.attrName] = value;
+            model.set(attrs);
+            break;
+          case "prop":
+            if (model) {
+              if (_.isFunction(model[this.attrName])) {
+                throw new Error("Property '" + this.attrName + "' specified by path '" + this.path + "' is a function and cannot be changed via model binding");
+              }
+              model[this.attrName] = value;
+            }
+        }
+      },
+      getModel: function (target) {
+        var model = this.parent.get(target);
+        return model;
+      },
+      bindToTarget: function (target, callback, context) {
+        var eventBindings = [];
+        var model = this.parent.get(target);
+        if (model instanceof Backbone.Model) {
+          var event = "change:" + this.attrName;
+          model.bind(event, callback, context);
+          eventBindings.push(new TargetEventBinding(model, [event], callback));
+        }
+        var parentEventBindings = this.parent.bindToTarget(target, callback, context);
+        return eventBindings.concat(parentEventBindings);
+      }
+    });
+
+
+    // Access item within a Backbone.Collection or array by index
+    var CollectionItemAccessor = function(parent,index,path){
+      this.parent = parent;
+      this.index = index;
+      this.path = path;
+    };
+    _.extend(CollectionItemAccessor.prototype,{
+        get: function (target) {
+        var collection = this.parent.get(target);
+        if (collection instanceof Backbone.Collection) {
+          return collection.at(this.index);
+        } else if (_.isArray(collection)) {
+          return collection[this.index];
+        }
+      },
+      has: function (target) {
+        var collection = this.parent.get(target);
+        return collection && collection.length > this.index;
+      },
+      set: function (target, value) {
+        var collection = this.parent.get(target);
+        if (collection instanceof Backbone.Collection) {
+          throw ("Setting an item in a Backbone collection is not supported by modelbinding. Elements in the view can be bound to attributes of models in the collection, but not directly to models");
+        }
+        else if (_.isArray(collection)) {
+          collection[this.index] = value;
+        }
+      },
+      bindToTarget: function (target, callback, context) {
+        var eventBindings = [];
+        var collection = this.parent.get(target);
+        if (collection instanceof Backbone.Collection) {
+          var events = ["add", "remove", "reset"]; // events that affect position of item
+          _.each(events, function (event) {
+            collection.bind(event, callback, context);
+          });
+          eventBindings.push(new TargetEventBinding(collection, events, callback));
+        }
+        var parentEventBindings = this.parent.bindToTarget(target, callback, context);
+        return eventBindings.concat(parentEventBindings);
+      }
+    });
+
+    // Tracks model or collection events bound to the "change" callback of ModelChangeTracker
+    // so they can be unbound
+    var TargetEventBinding = function (target, eventNames, callback) {
+      this.unbindFromTarget = function () {
+        _.each(eventNames, function (eventName) {
+          target.unbind(eventName, callback);
+        }, this);
+      };
+    };
+
     // Converts path expression string, e.g. "manufacturer.name" to a sequence of objects with data about
     // the parts of the expression
-    var parsePathExpression = function () {
+    var parseAccessor = function () {
       var error = function (description) {
         var message = "Unexpected syntax at position " + index + " in model path '" + text + "': " + description;
         throw {
@@ -41,32 +198,38 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
           text: text
         };
       },
-        expressionChain = function () {
-          var result = [], first = true;
-          white();
-          while (current) {
-            result.push(expression(first));
-            if (white() && current) { // there was some whitespace but not at end, oh no!
+        accessor = function (parent) {
+          var result = parent;
+          if (current) {
+            switch (current) {
+              case "[":
+                result = collectionItemAccessor(parent);
+                break;
+              default:
+                result = attrAccessor(parent);
+                break;
+            }
+            if (white() && current) { // whitespace but not at end!
               error("Unexpected whitespace in middle of path");
             }
-            first = false;
+            result = accessor(result);
           }
           return result;
         },
-        expression = function (first) {
-          switch (current) {
-            case "[":
-              return collectionItemAccess(first);
-            default:
-              return attributeAccess(first);
-          }
-        },
-        collectionItemAccess = function () {
-          var number;
+        collectionItemAccessor = function (parent) {
           next("[");
-          number = integer();
+          var itemIndex = integer();
           next("]");
-          return { type: "collectionItemAccess", index: number, text: "[" + number + "]" };
+          return new CollectionItemAccessor(parent, itemIndex, parent.path + "[" + itemIndex + "]");
+        },
+        attrAccessor = function (parent) {
+          var path = parent.path;
+          if (!parent.isRoot) {
+            path += next(".");
+          }
+          var attrName = name();
+          path += attrName;
+          return new AttrAccessor(parent, attrName, path);
         },
         integer = function () {
           var number, string = "";
@@ -80,26 +243,17 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
           number = +string;
           return number;
         },
-        attributeAccess = function (first) {
-          var text = "", attrName;
-          if (!first) {
-            text = next(".");
-          }
-          attrName = name();
-          text += attrName;
-          return { type: "attributeAccess", name: attrName, text: text };
-        },
-        name = function () {
-          var string = "";
-          if (!/[A-Za-z_]/.test(current)) {
-            error("Names used to access an attribute must start with a character or underscore");
-          }
-          string += next();
-          while (/[A-Za-z_0-9]/.test(current)) {
-            string += next();
-          }
-          return string;
-        },
+       name = function () {
+         var string = "";
+         if (!/[A-Za-z_]/.test(current)) {
+           error("Names used to access an attribute must start with a character or underscore");
+         }
+         string += next();
+         while (/[A-Za-z_0-9]/.test(current)) {
+           string += next();
+         }
+         return string;
+       },
         next = function (expected) {
           if (expected && expected != current) {
             error("Expected '" + expected + "' instead of '" + current + "'");
@@ -122,7 +276,8 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         text = path;
         index = 0;
         current = (text.length > 0) ? text[index] : "";
-        result = expressionChain();
+        white();
+        result = accessor(new RootAccessor());
         if (current) {
           error("Unrecognised syntax");
         }
@@ -131,176 +286,17 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
     } ();
 
     // ----------------------------
-    // Accessors - Responsible for getting / setting values specified by a path expression (e.g."manufacturer.name") 
-    // on a target object (Backbone model or collection). 
-    // 
-    // A deep path will result in a chain of accessors, for example, an accessor for path "manufacturer.name" would 
-    // result in the following hierarchy:
-    //
-    // RootAccessor - retrieves the root model
-    // > AttrAccessor - retrieves the "manufacturer" attr of the root model
-    //   > AttrAccessor - retrieves the "name" attr of the Model referenced by parent "manufacturer" expression
-    //
-    // Accessors do not hold a reference to a specific target but are used by ModelChangeTracker (below) for:
-    // 1. accessing attr values
-    // 2. binding events to models and collections along the chain
-    // ----------------------------
-
-    // References the root model at the start of a chain of access expressions
-    var RootAccessor = function () {
-      this.get = function (target) {
-        return target;
-      };
-      this.has = function (target) {
-        return !_.isNull(target) && !_.isUndefined(target);
-      },
-      this.bindToTarget = function () {
-        return [];
-      };
-    };
-
-    // Accesses an attribute of a Backbone.Model instance
-    var AttrAccessor = function (parent, expression){
-      this.get = function (target) {
-        var model = this.getModel(target);
-        if(model instanceof Backbone.Model && model.has(expression.name)){
-          return model.get(expression.name);
-        }
-        else if (model && !_.isFunction(model[expression.name])) {
-          return model[expression.name];
-        }
-        else {
-          return undefined;
-        }
-      };
-      this.has = function(target){
-        var model = this.getModel(target);
-        if(model instanceof Backbone.Model && model.has(expression.name)){
-          return true;
-        }
-        else {
-          return model && expression.name in model;
-        }
-      };
-      this.set = function (target, value) {
-        var model = this.getModel(target);
-        var mode = "prop";
-        if(model instanceof Backbone.Model) {
-          var existsAsProperty = model 
-            && expression.name in model 
-            && !_.isFunction(model[expression.name]);
-          if(model.has(expression.name) || !existsAsProperty) {
-            // Set attribute on model if not currently attr or property
-            mode = "attr"; 
-          }
-        }
-        switch(mode) {
-          case "attr":
-            var attrs = {};
-            attrs[expression.name] = value;
-            model.set(attrs);
-            break;
-          case "prop":
-            if(model) {
-              if(_.isFunction(model[expression.name])) {
-                throw new Error("Property '" + expression.name + "' is a function and cannot be changed via model binding");
-              }
-              model[expression.name] = value;
-            }
-        }
-      },
-      this.getModel = function (target) {
-        var model = parent.get(target);
-        return model;
-      };
-      this.bindToTarget = function (target, callback, context) {
-        var eventBindings = [];
-        var model = parent.get(target);
-        if (model instanceof Backbone.Model) {
-          var event = "change:" + expression.name;
-          model.bind(event, callback, context);
-          eventBindings.push(new TargetEventBinding(model, [event], callback));
-        }
-        var parentEventBindings = parent.bindToTarget(target, callback, context);
-        return eventBindings.concat(parentEventBindings);
-      };
-    };
-    AttrAccessor.expressionType = "attributeAccess";
-
-    // Access model within a Backbone.Collection by index
-    var CollectionItemAccessor = function (parent, expression) {
-      this.get = function (target) {
-        var collection = parent.get(target);
-        if (collection instanceof Backbone.Collection) {
-          return collection.at(expression.index);
-        } else if(_.isArray(collection)) {
-          return collection[expression.index];
-        }
-      };
-      this.has = function (target) {
-        var collection = parent.get(target);
-        return collection.length > expression.index;
-      },
-      this.set = function (target, value) {
-        var collection = parent.get(target);
-        if (collection instanceof Backbone.Collection) {
-          throw ("Setting an item in a Backbone collection is not supported by modelbinding. Elements in the view can be bound to attributes of models in the collection, but not directly to models");
-        }
-        else if (_.isArray(collection)) {
-          collection[expression.index] = value;
-        }
-      };
-      this.bindToTarget = function (target, callback, context) {
-        var eventBindings = [];
-        var collection = parent.get(target);
-        if (collection instanceof Backbone.Collection) {
-          // track events that affect position of item
-          var events = ["add", "remove", "reset"];
-          _.each(events, function (event) {
-            collection.bind(event, callback, context);
-          });
-          eventBindings.push(new TargetEventBinding(collection, events, callback));
-        }
-        var parentEventBindings = parent.bindToTarget(target, callback, context);
-        return eventBindings.concat(parentEventBindings);
-      };
-    };
-    CollectionItemAccessor.expressionType = "collectionItemAccess";
-
-    // Tracks model or collection events bound to the "change" callback of ModelChangeTracker
-    // so they can be unbound
-    var TargetEventBinding = function (target, eventNames, callback) {
-      this.unbindFromTarget = function () {
-        _.each(eventNames, function (eventName) {
-          target.unbind(eventName, callback);
-        }, this);
-      };
-    };
-
-    var accessorTypes = [AttrAccessor, CollectionItemAccessor];
-
-    var buildAccessor = function (path) {
-      var expressions = parsePathExpression(path);
-      var accessor = _.reduce(expressions, function (parent, expression) {
-        var accessorType = _.detect(accessorTypes, function (a) { return a.expressionType === expression.type; });
-        return new accessorType(parent, expression);
-      }, new RootAccessor(), this);
-
-      return accessor;
-    };
-
-    // ----------------------------
     // ModelChangeTracker - Manages get / set of attr specified by a path expression and monitors for changes to
     // the specified attribute// 
     // ----------------------------
     var ModelChangeTracker = function (target, accessor, path) {
       this.target = target;
       this.accessor = accessor;
-    this.path = path;
+      this.path = path;
       this.currentValue = this.getValue(this.target);
       this.currentBindings = [];
       var self = this;
-      this.changeCallback = function() { self.change(); }; // func must belong to instance, not prototype to allow unbinding
+      this.changeCallback = function () { self.change(); }; // func must belong to instance, not prototype to allow unbinding
       this.bindToTargets();
     };
     _.extend(ModelChangeTracker.prototype, Backbone.Events, {
@@ -338,13 +334,11 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
 
     return {
       accessorFor: function (path) {
-        var accessor = buildAccessor(path);
-        return accessor;
+        return parseAccessor(path);
       },
       changeTrackerFor: function (target, path) {
         var accessor = this.accessorFor(path);
-        var binder = new ModelChangeTracker(target, accessor, path);
-        return binder;
+        return new ModelChangeTracker(target, accessor, path);
       }
     };
   })();
