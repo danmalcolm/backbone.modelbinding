@@ -219,7 +219,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         if (model instanceof Backbone.Model) {
           var event = "change:" + expression.name;
           model.bind(event, callback, context);
-          eventBindings.push(new TargetEventBinding(model, [event]));
+          eventBindings.push(new TargetEventBinding(model, [event], callback));
         }
         var parentEventBindings = parent.bindToTarget(target, callback, context);
         return eventBindings.concat(parentEventBindings);
@@ -259,7 +259,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
           _.each(events, function (event) {
             collection.bind(event, callback, context);
           });
-          eventBindings.push(new TargetEventBinding(collection, events));
+          eventBindings.push(new TargetEventBinding(collection, events, callback));
         }
         var parentEventBindings = parent.bindToTarget(target, callback, context);
         return eventBindings.concat(parentEventBindings);
@@ -269,10 +269,10 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
 
     // Tracks model or collection events bound to the "change" callback of ModelChangeTracker
     // so they can be unbound
-    var TargetEventBinding = function (target, events) {
-      this.unbindFromTarget = function (callback) {
-        _.each(events, function (event) {
-          target.unbind(event, callback);
+    var TargetEventBinding = function (target, eventNames, callback) {
+      this.unbindFromTarget = function () {
+        _.each(eventNames, function (eventName) {
+          target.unbind(eventName, callback);
         }, this);
       };
     };
@@ -293,17 +293,20 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
     // ModelChangeTracker - Manages get / set of attr specified by a path expression and monitors for changes to
     // the specified attribute// 
     // ----------------------------
-    var ModelChangeTracker = function (target, accessor) {
+    var ModelChangeTracker = function (target, accessor, path) {
       this.target = target;
       this.accessor = accessor;
+    this.path = path;
       this.currentValue = this.getValue(this.target);
       this.currentBindings = [];
+      var self = this;
+      this.changeCallback = function() { self.change(); }; // func must belong to instance, not prototype to allow unbinding
       this.bindToTargets();
     };
     _.extend(ModelChangeTracker.prototype, Backbone.Events, {
       change: function () {
         this.triggerChange();
-        // The targets along chain that we need to bind to may be different instances,
+        // Any targets along chain that we are bound to may be different instances,
         // so we need to rebind. Certain types of change (attr change at end of chain) 
         // don't require a rebind - could optimise for this...
         this.unbindFromTargets();
@@ -320,7 +323,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         _.each(this.currentBindings, function (b) { b.unbindFromTarget(); });
       },
       bindToTargets: function () {
-        this.currentBindings = this.accessor.bindToTarget(this.target, this.change, this);
+        this.currentBindings = this.accessor.bindToTarget(this.target, this.changeCallback, this);
       },
       getValue: function () {
         return this.accessor.get(this.target);
@@ -340,7 +343,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       },
       changeTrackerFor: function (target, path) {
         var accessor = this.accessorFor(path);
-        var binder = new ModelChangeTracker(target, accessor);
+        var binder = new ModelChangeTracker(target, accessor, path);
         return binder;
       }
     };
