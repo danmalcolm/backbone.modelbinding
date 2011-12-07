@@ -1,4 +1,7 @@
 AModel = Backbone.Model.extend({});
+ACollection = Backbone.Collection.extend({
+  model: AModel
+});
 
 AView = Backbone.View.extend({
   render: function(){
@@ -18,6 +21,8 @@ AView = Backbone.View.extend({
       <div id='showIt'></div>\
       <input type='text' id='prefilled_name' value='a name'>\
       <input type='text' id='name'>\
+      <input type='text' id='favouriteColor.name'>\
+      <input type='text' id='otherFavouriteColors[1].name'>\
       <select id='operating_system'> \
         <option value='osx'>osx</option> \
         <option value='windows'>windows</option> \

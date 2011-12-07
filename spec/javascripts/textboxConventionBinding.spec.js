@@ -1,8 +1,12 @@
 describe("textbox convention bindings", function(){
   beforeEach(function(){
+    var color = new AModel({ name: "blue" });
+    var otherFavouriteColors = new ACollection([ { name: "red"}, { name: "orange"}, { name: "yellow" }]);
     this.model = new AModel({
       name: "Ashelia Bailey", 
-      noType: 'there is no type'
+      noType: 'there is no type',
+      favouriteColor: color,
+      otherFavouriteColors: otherFavouriteColors
     });
     this.view = new AView({model: this.model});
   });
@@ -30,6 +34,63 @@ describe("textbox convention bindings", function(){
     });
   });
 
+  describe("text element binding to attr of nested model", function () {
+    beforeEach(function () {
+      this.view.render();
+      this.el = this.view.$("#favouriteColor\\.name");
+    });
+
+    it("bind view changes to the nested model's attr, by convention of id", function () {
+      this.el.val("red");
+      this.el.trigger('change');
+
+      expect(this.model.get("favouriteColor").get('name')).toEqual("red");
+    });
+
+    it("bind nested model attr changes to the form input, by convention of id", function () {
+      this.model.get("favouriteColor").set({ name: "red" });
+      expect(this.el.val()).toEqual("red");
+      this.model.get("favouriteColor").set({ name: "orange" });
+      expect(this.el.val()).toEqual("orange");
+      this.model.get("favouriteColor").set({ name: "yellow" });
+      expect(this.el.val()).toEqual("yellow");
+    });
+
+    it("binds the model's value to the form field on render", function () {
+      expect(this.el.val()).toEqual("blue");
+    });
+  });
+
+  /* TODO: write new view using name attrs hmmm, [] not allowed in id names - can we have different syntax for ids or recommend using name attribute?
+
+  describe("text element binding to attr of model in nested collection", function () {
+  beforeEach(function () {
+  this.view.render();
+  this.el = this.view.$("[name#otherFavouriteColors\\.name");
+  });
+
+  it("bind view changes to the nested model's attr, by convention of id", function () {
+  this.el.val("red");
+  this.el.trigger('change');
+
+  expect(this.model.get("favouriteColor").get('name')).toEqual("red");
+  });
+
+  it("bind nested model attr changes to the form input, by convention of id", function () {
+  this.model.get("favouriteColor").set({ name: "red" });
+  expect(this.el.val()).toEqual("red");
+  this.model.get("favouriteColor").set({ name: "orange" });
+  expect(this.el.val()).toEqual("orange");
+  this.model.get("favouriteColor").set({ name: "yellow" });
+  expect(this.el.val()).toEqual("yellow");
+  });
+
+  it("binds the model's value to the form field on render", function () {
+  expect(this.el.val()).toEqual("blue");
+  });
+  });
+  */
+  
   describe("when the form field has a value but the model does not", function(){
     beforeEach(function(){
       this.view.render();
@@ -63,4 +124,6 @@ describe("textbox convention bindings", function(){
       expect(this.el.val()).toEqual("there is no type");
     });
   });
+  
+  
 });

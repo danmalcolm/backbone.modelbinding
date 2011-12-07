@@ -364,8 +364,10 @@ describe("Model Access", function () {
         expect(changeTrackerEvents).toContainNoEvents();
       });
 
-
     });
+
+
+
 
     describe("When bound to attr of model at specified position in nested collection", function () {
       var collection;
@@ -375,9 +377,16 @@ describe("Model Access", function () {
         collection = product.get("reviews");
       });
 
-      it("should notify of changes to attr", function () {
-        collection.at(1).set({ title: "New Title!" });
-        expect(changeTrackerEvents).toContainEventsWithValues(["New Title!"]);
+      it("should notify of each change to attr", function () {
+        collection.at(1).set({ title: "New Title 1!" });
+        collection.at(1).set({ title: "New Title 2!" });
+        collection.at(1).set({ title: "New Title 3!" });
+        expect(changeTrackerEvents).toContainEventsWithValues(["New Title 1!", "New Title 2!", "New Title 3!"]);
+      });
+
+      it("should be able to get attr", function () {
+        var value = changeTracker.getValue();
+        expect(value).toEqual(review2.get("title"));
       });
 
       it("should be able to set attr", function () {
@@ -399,6 +408,13 @@ describe("Model Access", function () {
       });
 
     });
+
+  });
+
+  describe("Model Change Tracker Binding and Unbinding", function () {
+
+
+
 
   });
 
