@@ -134,13 +134,13 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
 
 
     // Access item within a Backbone.Collection or array by index
-    var CollectionItemAccessor = function(parent,index,path){
+    var CollectionItemAccessor = function (parent, index, path) {
       this.parent = parent;
       this.index = index;
       this.path = path;
     };
-    _.extend(CollectionItemAccessor.prototype,{
-        get: function (target) {
+    _.extend(CollectionItemAccessor.prototype, {
+      get: function (target) {
         var collection = this.parent.get(target);
         if (collection instanceof Backbone.Collection) {
           return collection.at(this.index);
@@ -332,6 +332,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       }
     });
 
+    var escapedPathCharsRegex = /([\.\[\]])/g ;
     return {
       accessorFor: function (path) {
         return parseAccessor(path);
@@ -339,6 +340,9 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       changeTrackerFor: function (target, path) {
         var accessor = this.accessorFor(path);
         return new ModelChangeTracker(target, accessor, path);
+      },
+      escapePathForUseInSelector: function (path) {
+        return path.replace(escapedPathCharsRegex, "\\$1");
       }
     };
   })();
@@ -594,22 +598,18 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
       view.$(selector).each(function (index) {
         var element = view.$(this);
 
-        var group_path = config.getBindingValue(element, 'radio');
-        if (!group_path) return;
-        if (!foundElements[group_path]) {
-          foundElements[group_path] = true;
+        var attr_path = config.getBindingValue(element, 'radio');
+        if (!attr_path) return;
+        if (!foundElements[attr_path]) {
+          foundElements[attr_path] = true;
           var bindingAttr = config.getBindingAttr('radio');
 
-          var changeTracker = modelAccess.changeTrackerFor(model, group_path);
+          var changeTracker = modelAccess.changeTrackerFor(model, attr_path);
           var modelChange = function (ev) {
-            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_path + "][value=" + ev.value + "]";
+            var value_selector = "input[type=radio][" + bindingAttr + "=" + attr_path + "][value=" + ev.value + "]";
             view.$(value_selector).attr("checked", "checked");
           };
           modelBinder.registerChangeTrackerBinding(changeTracker, modelChange);
-
-          var setModelValue = function (val) {
-            changeTracker.setValue(val);
-          };
 
           // bind the form changes to the model
           var elementChange = function (ev) {
@@ -619,7 +619,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
             }
           };
 
-          var group_selector = "input[type=radio][" + bindingAttr + "=" + group_path + "]";
+          var group_selector = "input[type=radio][" + bindingAttr + "=" + attr_path + "]";
           view.$(group_selector).each(function () {
             var groupEl = $(this);
             modelBinder.registerElementBinding(groupEl, elementChange);
@@ -628,11 +628,11 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
           var attr_value = changeTracker.getValue();
           if (typeof attr_value !== "undefined" && attr_value !== null) {
             // set the default value on the form, from the model
-            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_path + "][value=" + attr_value + "]";
+            var value_selector = "input[type=radio][" + bindingAttr + "=" + modelAccess.escapePathForUseInSelector(attr_path) + "][value=" + attr_value + "]";
             view.$(value_selector).attr("checked", "checked");
           } else {
             // set the model to the currently selected radio button
-            var value_selector = "input[type=radio][" + bindingAttr + "=" + group_path + "]:checked";
+            var value_selector = "input[type=radio][" + bindingAttr + "=" + modelAccess.escapePathForUseInSelector(attr_path) + "]:checked";
             var value = view.$(value_selector).val();
             changeTracker.setValue(value);
           }

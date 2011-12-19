@@ -22,7 +22,7 @@ AView = Backbone.View.extend({
       <input type='text' id='prefilled_name' value='a name'>\
       <input type='text' id='name'>\
       <input type='text' id='favouriteColor.name'>\
-      <input type='text' id='otherFavouriteColors[1].name'>\
+      <input type='text' name='otherFavouriteColors[1].name'>\
       <select id='operating_system'> \
         <option value='osx'>osx</option> \
         <option value='windows'>windows</option> \
@@ -67,6 +67,27 @@ AView = Backbone.View.extend({
       ");
     this.$(this.el).append(html);
     Backbone.ModelBinding.bind(this);
+  }
+});
+
+AViewBindingByName = Backbone.View.extend({
+  render: function(){
+    var html = $("\
+      <input type='text' name='favouriteColor.name'> \
+      <input type='radio' id='brightness_dark' name='favouriteColor.brightness' value='dark'>\
+      <input type='radio' id='brightness_medium' name='favouriteColor.brightness' value='medium'>\
+      <input type='radio' id='brightness_light' name='favouriteColor.brightness' value='light'>\
+      <input type='radio' id='anotherProp_value1' name='favouriteColor.anotherProp' value='value1'>\
+      <input type='radio' id='anotherProp_value2' name='favouriteColor.anotherProp' value='value2' checked='checked'>\
+      <input type='text' name='otherFavouriteColors[1].name' >\
+      <input type='radio' id='otherFavouriteColors_1_brightness_dark' name='otherFavouriteColors[1].brightness' value='dark'>\
+      <input type='radio' id='otherFavouriteColors_1_brightness_medium' name='otherFavouriteColors[1].brightness' value='medium'>\
+      <input type='radio' id='otherFavouriteColors_1_brightness_light' name='otherFavouriteColors[1].brightness' value='light'>\
+      <input type='radio' id='otherFavouriteColors_1_anotherProp_value1' name='otherFavouriteColors[1].anotherProp' value='value1'>\
+      <input type='radio' id='otherFavouriteColors_1_anotherProp_value2' name='otherFavouriteColors[1].anotherProp' value='value2' checked='checked'>");
+
+    this.$(this.el).append(html);
+    Backbone.ModelBinding.bind(this, {all: "name"});
   }
 });
 
