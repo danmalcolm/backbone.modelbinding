@@ -275,7 +275,7 @@ Backbone.ModelBinding = (function (Backbone, _, $) {
         var result;
         text = path;
         index = 0;
-        current = (text.length > 0) ? text[index] : "";
+        current = (text.length > 0) ? text.charAt(index) : "";
         white();
         result = accessor(new RootAccessor());
         if (current) {
